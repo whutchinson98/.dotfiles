@@ -4,8 +4,9 @@ end
 fish_add_path /usr/local/go/bin
 mise activate fish | source
 
-# Pi
-fish_add_path "/home/hutch/.local/share/fnm/node-versions/v26.8.1/installation/bin"
+# Pi is installed as a global npm package on fnm's active node. conf.d/fnm.fish
+# runs `fnm env`, which puts that node's bin on PATH, so pi resolves without
+# pinning a version here.
 
 # ============================================================================
 # Converted from nixos-config/modules/terminal/fish.nix (programs.fish.shellInit)
