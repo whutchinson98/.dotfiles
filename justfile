@@ -158,7 +158,9 @@ install-list:
     set -euo pipefail
     printf '%-12s %-9s %s\n' PROGRAM STATUS METHOD
     printf '%-12s %-9s %s\n' ------- ------ ------
-    for s in {{ REPO }}/install/*.sh; do
+    # LC_ALL=C so '.' sorts before letters and go.sh precedes gopls.sh;
+    # the default locale collation ignores punctuation and reverses them.
+    for s in $(printf '%s\n' {{ REPO }}/install/*.sh | LC_ALL=C sort); do
         n=$(basename "$s" .sh)
         case "$n" in lib|_*) continue ;; esac
         desc=$(sed -n 's/^SCRIPT_DESC="\(.*\)"$/\1/p' "$s" | head -1)
