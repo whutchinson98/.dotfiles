@@ -10,7 +10,11 @@ REPO := justfile_directory()
 TARGET := env("HOME")
 
 # Top-level dirs that are NOT stow packages.
-NON_PACKAGES := "docs"
+NON_PACKAGES := "docs install"
+
+# Install order for `install-all`: prerequisites before their dependants.
+# rust before the cargo tools, go before gopls, fnm before node before pi.
+INSTALL_ORDER := "git stow fish tmux alacritty eza fzf fd fonts starship mise rust jj ripgrep just go gopls neovim fnm node pi bun pnpm op claude herdr"
 
 # Shell snippet that prints one package name per line.
 pkgs := "ls -1 " + REPO + " | while read -r d; do [ -d '" + REPO + "'/\"$d\" ] || continue; case \" " + NON_PACKAGES + " \" in *\" $d \"*) continue;; esac; echo \"$d\"; done"
@@ -144,3 +148,84 @@ prune:
 bootstrap:
     @cd {{ REPO }} && ./init.sh
     @just sync
+
+# --- installers ---------------------------------------------------------------
+
+# List every program install/ can install, with its method.
+[group('install')]
+install-list:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '%-12s %-9s %s\n' PROGRAM STATUS METHOD
+    printf '%-12s %-9s %s\n' ------- ------ ------
+    for s in {{ REPO }}/install/*.sh; do
+        n=$(basename "$s" .sh)
+        case "$n" in lib|_*) continue ;; esac
+        desc=$(sed -n 's/^SCRIPT_DESC="\(.*\)"$/\1/p' "$s" | head -1)
+        if {{ REPO }}/install/_installed.sh "$n"; then st=installed; else st=MISSING; fi
+        printf '%-12s %-9s %s\n' "$n" "$st" "$desc"
+    done
+
+# Show which programs are installed and which are missing.
+[group('install')]
+install-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    missing=()
+    for n in {{ INSTALL_ORDER }}; do
+        {{ REPO }}/install/_installed.sh "$n" || missing+=("$n")
+    done
+    total=$(echo {{ INSTALL_ORDER }} | wc -w)
+    echo "$((total - ${#missing[@]}))/$total installed"
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "missing: ${missing[*]}"
+        echo "install them with: just install ${missing[0]}   (or: just install-all)"
+    fi
+
+# Install one program, e.g. `just install neovim`. Pass --dry-run to preview.
+[group('install')]
+install PROG *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    s="{{ REPO }}/install/{{ PROG }}.sh"
+    if [ ! -x "$s" ]; then
+        echo "no installer for '{{ PROG }}' — available:" >&2
+        ls -1 {{ REPO }}/install/*.sh | xargs -n1 basename | sed 's/\.sh$//' \
+            | grep -vx lib | grep -v '^_' | sort | tr '\n' ' ' >&2; echo >&2
+        exit 1
+    fi
+    "$s" {{ ARGS }}
+
+# Preview what installing a program would do, changing nothing.
+[group('install')]
+install-check PROG:
+    @just install {{ PROG }} --dry-run
+
+# Install everything that is missing, in dependency order.
+[group('install')]
+install-all *ARGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    failed=()
+    for n in {{ INSTALL_ORDER }}; do
+        echo
+        echo "───── $n ─────"
+        if ! "{{ REPO }}/install/$n.sh" {{ ARGS }}; then
+            echo "  !! $n failed" >&2
+            failed+=("$n")
+        fi
+    done
+    echo
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo "finished with failures: ${failed[*]}" >&2
+        exit 1
+    fi
+    echo "all installers completed"
+
+# Full setup on a fresh machine: install everything, then stow everything.
+[group('setup')]
+setup:
+    @cd {{ REPO }} && ./init.sh
+    @just install-all
+    @just sync
+    @just install-status

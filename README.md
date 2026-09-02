@@ -11,14 +11,68 @@ Every top-level directory is a **stow package** whose internal layout mirrors
 ```sh
 git clone <this repo> ~/d/dotfiles
 cd ~/d/dotfiles
-./init.sh --sync
+./init.sh          # install stow + just
+just setup         # install every program, then stow every package
 ```
 
 `init.sh` detects the OS family (Debian/Ubuntu-style via `apt`, Fedora/RHEL-style
 via `dnf`/`yum`, including derivatives such as Pop!_OS, Mint, Rocky and Alma),
-installs `stow` and `just`, and then stows everything. If `just` is not in the
-distro's repos — it is missing from older apt releases — it falls back to the
-upstream installer targeting `~/.local/bin`.
+installs `stow` and `just`, and can stow everything with `--sync`. If `just` is
+not in the distro's repos — it is missing from older apt releases — it falls back
+to the upstream installer targeting `~/.local/bin`.
+
+Prefer to go step by step? `./init.sh --sync` gets you configs only; add
+`just install-all` when you want the programs too.
+
+## Installing the programs
+
+`install/` holds one script per program, each idempotent and each accepting
+`--dry-run`. OS detection and package plumbing live in `install/lib.sh`, shared
+with `init.sh`.
+
+```sh
+just install-list          # every program, its status and install method
+just install-status        # short summary of what is missing
+just install neovim        # install one
+just install-check neovim  # preview it, changing nothing
+just install-all           # install everything missing, in dependency order
+```
+
+`install-all` never upgrades anything that is already present, so it is safe to
+re-run. The installers that track an upstream version (`go`, `neovim`) report
+when a newer release exists and upgrade only on request:
+
+```sh
+just install go --update
+```
+
+Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
+`NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`.
+
+### Install methods
+
+| Program | Method |
+| --- | --- |
+| fish, tmux, git, alacritty, stow | distro package |
+| eza, fzf | distro package, falling back to a GitHub release on older distros |
+| fd | distro package `fd-find` (Debian names the binary `fdfind`) |
+| op | 1Password's own apt/dnf repository |
+| starship, mise, fnm, bun, pnpm, claude, herdr | upstream install script |
+| neovim, go, fonts | official release tarball/zip |
+| rust (rustup) | rustup.rs; rust-analyzer as a rustup component |
+| jj, ripgrep, just | `cargo install --locked` |
+| node | `fnm install` |
+| pi | `npm install -g @earendil-works/pi-coding-agent` |
+| gopls | `go install` |
+
+Dependency order is declared once, in `INSTALL_ORDER` in the justfile: rustup
+before the cargo tools, go before gopls, fnm before node before pi. Individual
+scripts also guard their own prerequisites, so `just install jj` on a machine
+without cargo tells you to run `just install rust` first rather than failing
+obscurely.
+
+`install/` is not a stow package — it, and `docs/`, are listed in
+`NON_PACKAGES`.
 
 ## Day to day
 
@@ -110,4 +164,15 @@ copy of `~/.pi` or `~/.claude` into this repo cannot leak secrets.
   hook failing is non-fatal.
 - Several files still carry `# Converted from nixos-config/...` headers.
 - `scripts/tmux-sessionizer` is bound to `Ctrl-F` in `config.fish`, so fish and
-  that script need to stay stowed together.
+  that script need to stay stowed together. It shells out to `fzf`.
+- `config.fish` sets `RIPGREP_CONFIG_PATH=~/.ripgreprc`, but no such file is
+  tracked here and none exists. Harmless — ripgrep ignores a missing config —
+  but the variable is currently pointing at nothing.
+- `config.fish` activates **mise** and `conf.d/fnm.fish` sets up **fnm**; both
+  are installed deliberately. node comes from fnm, and `fnm env` is what puts
+  pi on `PATH`.
+- `fish_user_paths` (in the untracked `fish_variables`) has accumulated
+  duplicates — `~/.bun/bin` appears 6 times on `PATH`, fnm's dir 5 times —
+  because `fish_add_path` writes to a universal variable that persists while
+  `config.fish` re-adds the same entries each session. Cosmetic, but worth a
+  `set -e fish_user_paths` someday.
