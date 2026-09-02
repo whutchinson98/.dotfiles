@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/hutch/.claude/hooks/herdr-agent-state.sh' session",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "tui": "fullscreen",
+  "theme": "dark",
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": true
+  }
+}
