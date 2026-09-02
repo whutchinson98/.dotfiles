@@ -21,8 +21,8 @@ tag="$(github_latest_tag junegunn/fzf)"
 ver="${tag#v}"
 log "fzf $tag"
 
-tmp="$(mktempdir)"
-download "https://github.com/junegunn/fzf/releases/download/${tag}/fzf-${ver}-linux_${ARCH_ALT}.tar.gz" "$tmp/fzf.tar.gz"
-run tar -xzf "$tmp/fzf.tar.gz" -C "$tmp"
-run install -m755 "$tmp/fzf" "$LOCAL_BIN/fzf"
+mktempdir
+download "https://github.com/junegunn/fzf/releases/download/${tag}/fzf-${ver}-linux_${ARCH_ALT}.tar.gz" "$TMP_DIR/fzf.tar.gz"
+run tar -xzf "$TMP_DIR/fzf.tar.gz" -C "$TMP_DIR"
+run install -m755 "$TMP_DIR/fzf" "$LOCAL_BIN/fzf"
 ok "fzf $tag installed to $LOCAL_BIN"

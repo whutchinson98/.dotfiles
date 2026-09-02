@@ -38,13 +38,13 @@ if have nvim; then
 fi
 
 need_sudo
-tmp="$(mktempdir)"
-download "https://github.com/neovim/neovim/releases/download/${tag}/${dirname_}.tar.gz" "$tmp/nvim.tar.gz"
+mktempdir
+download "https://github.com/neovim/neovim/releases/download/${tag}/${dirname_}.tar.gz" "$TMP_DIR/nvim.tar.gz"
 
 log "extracting to /opt/${dirname_}"
-run tar -xzf "$tmp/nvim.tar.gz" -C "$tmp"
+run tar -xzf "$TMP_DIR/nvim.tar.gz" -C "$TMP_DIR"
 run $SUDO rm -rf "/opt/${dirname_}"
-run $SUDO mv "$tmp/${dirname_}" "/opt/${dirname_}"
+run $SUDO mv "$TMP_DIR/${dirname_}" "/opt/${dirname_}"
 
 # A stable symlink so PATH does not depend on the arch-specific directory.
 run $SUDO ln -sfn "/opt/${dirname_}" /opt/nvim

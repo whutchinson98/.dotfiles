@@ -202,13 +202,22 @@ github_latest_tag() {
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1
 }
 
-# Scratch dir, cleaned up on exit.
+# Scratch dir, cleaned up on exit. Sets TMP_DIR; call it as a plain statement
+# and read "$TMP_DIR":
+#
+#     mktempdir
+#     download "$url" "$TMP_DIR/thing.tar.gz"
+#
+# It must NOT be called via command substitution. That runs the function in a
+# subshell, so the EXIT trap registered below belongs to the subshell and fires
+# the moment the substitution completes — deleting the directory before the
+# caller can use it (curl then fails to write, exit 23).
+#
+# The trap replaces any previous EXIT trap; no installer sets one of its own.
 mktempdir() {
-    local d
-    d="$(mktemp -d)"
+    TMP_DIR="$(mktemp -d)"
     # shellcheck disable=SC2064
-    trap "rm -rf '$d'" EXIT
-    printf '%s' "$d"
+    trap "rm -rf '$TMP_DIR'" EXIT
 }
 
 # Warn when a tool is being installed but its prerequisite is missing.

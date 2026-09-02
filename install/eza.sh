@@ -26,8 +26,8 @@ case "$ARCH" in
     *) die "unsupported arch for eza release: $ARCH" ;;
 esac
 
-tmp="$(mktempdir)"
-download "https://github.com/eza-community/eza/releases/download/${tag}/eza_${target}.tar.gz" "$tmp/eza.tar.gz"
-run tar -xzf "$tmp/eza.tar.gz" -C "$tmp"
-run install -m755 "$tmp/eza" "$LOCAL_BIN/eza"
+mktempdir
+download "https://github.com/eza-community/eza/releases/download/${tag}/eza_${target}.tar.gz" "$TMP_DIR/eza.tar.gz"
+run tar -xzf "$TMP_DIR/eza.tar.gz" -C "$TMP_DIR"
+run install -m755 "$TMP_DIR/eza" "$LOCAL_BIN/eza"
 ok "eza $tag installed to $LOCAL_BIN"

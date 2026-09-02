@@ -41,11 +41,11 @@ case "$ARCH" in
 esac
 
 need_sudo
-tmp="$(mktempdir)"
-download "https://go.dev/dl/${ver}.linux-${goarch}.tar.gz" "$tmp/go.tar.gz"
+mktempdir
+download "https://go.dev/dl/${ver}.linux-${goarch}.tar.gz" "$TMP_DIR/go.tar.gz"
 
 log "extracting to /usr/local/go"
 run $SUDO rm -rf /usr/local/go
-run $SUDO tar -C /usr/local -xzf "$tmp/go.tar.gz"
+run $SUDO tar -C /usr/local -xzf "$TMP_DIR/go.tar.gz"
 
 ok "$ver installed to /usr/local/go"

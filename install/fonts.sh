@@ -22,12 +22,12 @@ tag="${NERD_FONTS_VERSION:-$(github_latest_tag ryanoasis/nerd-fonts)}"
 [ -n "$tag" ] || die "could not determine latest nerd-fonts release (set NERD_FONTS_VERSION to pin one)"
 log "nerd-fonts $tag — $FONT_NAME"
 
-tmp="$(mktempdir)"
-download "https://github.com/ryanoasis/nerd-fonts/releases/download/${tag}/${FONT_NAME}.zip" "$tmp/font.zip"
+mktempdir
+download "https://github.com/ryanoasis/nerd-fonts/releases/download/${tag}/${FONT_NAME}.zip" "$TMP_DIR/font.zip"
 
 run mkdir -p "$FONT_DIR"
 log "unpacking into $FONT_DIR"
-run unzip -oq "$tmp/font.zip" -d "$FONT_DIR" -x 'README*' 'LICENSE*' 'OFL*'
+run unzip -oq "$TMP_DIR/font.zip" -d "$FONT_DIR" -x 'README*' 'LICENSE*' 'OFL*'
 
 if have fc-cache; then
     log "rebuilding font cache"
