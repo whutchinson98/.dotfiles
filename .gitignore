@@ -15,3 +15,4 @@
 **/models-store.json
 **/history.jsonl
 **/*.log
+nvim/.config/nvim/lazy-lock.json
