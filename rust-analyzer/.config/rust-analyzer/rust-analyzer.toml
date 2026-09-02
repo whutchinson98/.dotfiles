@@ -1,0 +1,9 @@
+# Clippy lints instead of plain cargo check
+check.command = "clippy"
+
+# Build into target/rust-analyzer/ so background checks don't
+# take the cargo lock and block terminal cargo commands
+cargo.targetDir = true
+
+# Don't crawl direnv's nix-store symlink tree
+files.excludeDirs = [".direnv"]

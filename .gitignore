@@ -1,0 +1,17 @@
+# Never commit credentials or agent state.
+# These paths are excluded defensively — they are not stow packages, but a
+# stray `cp -r` of ~/.pi or ~/.claude into this repo must not leak secrets.
+**/auth.json
+**/.credentials.json
+**/*.key
+**/cookies.json
+.claude.json
+.claude.json.backup.*
+
+# Local agent/tool state that is machine-specific, not config.
+**/sessions/
+**/projects/
+**/trust.json
+**/models-store.json
+**/history.jsonl
+**/*.log

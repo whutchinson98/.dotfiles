@@ -1,0 +1,17 @@
+# Converted from nixos-config/modules/terminal/git.nix
+
+[user]
+	email = will@thehutchery.com
+	name = Hutch
+
+[init]
+	defaultBranch = main
+
+[url "git@github.com:macro-inc/"]
+	insteadOf = macro:
+
+[url "git@github.com:whutchinson98/"]
+	insteadOf = gh:
+
+[url "git@gitlab.com:hutchery/"]
+	insteadOf = gl:

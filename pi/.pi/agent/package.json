@@ -1,0 +1,11 @@
+{
+  "name": "hutch-pi-agent-config",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"],
+    "themes": ["./themes"]
+  }
+}

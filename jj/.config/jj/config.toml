@@ -1,0 +1,18 @@
+# Converted from nixos-config/modules/terminal/jujutsu.nix
+
+[user]
+email = "will@thehutchery.com"
+name = "Hutch"
+
+[remotes.origin]
+auto-track-bookmarks = "glob:hutch/* | glob:whutchinson98/*"
+
+[remotes.upstream]
+auto-track-bookmarks = "main"
+
+# Rendered from the dotfiles.jujutsu.sshSigning.enable branch of jujutsu.nix
+[signing]
+behavior = "own"
+sign-all = true
+backend = "ssh"
+key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIENMDh7q29md/cAQWBp13Fk//buN4KiQIiwJze+rRj9P"
