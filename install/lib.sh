@@ -24,9 +24,9 @@ die()  { printf '\033[1;31m xx\033[0m %s\n' "$*" >&2; exit 1; }
 # DRY_RUN may also be set in the environment (the justfile uses that).
 
 DRY_RUN="${DRY_RUN:-0}"
-# UPDATE only affects installers that track an upstream version (go, neovim,
-# fonts). Without it they leave an existing install alone, so `install-all`
-# never silently upgrades anything.
+# UPDATE makes an installer act on a program that is already present, instead
+# of exiting early — see already(). Without it nothing is ever upgraded, so
+# `install-all` is a safe no-op on a provisioned machine.
 UPDATE="${UPDATE:-0}"
 
 lib_parse_args() {
@@ -63,10 +63,20 @@ run_shell() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# Report "already installed" and exit 0. Every script starts with this so
-# `just install-all` is idempotent and cheap to re-run.
+# Every installer starts with this, which is what makes `install-all`
+# idempotent: by default it reports the existing install and exits 0.
+#
+# Under --update it instead RETURNS, so the caller falls through to its normal
+# install path. That is the update mechanism for every installer: re-running
+# apt/dnf, an upstream install script, `cargo install`, `npm -g` or a release
+# download all fetch the current version. Installers needing more than a
+# re-run (go, neovim, node, rust) handle UPDATE explicitly as well.
 already() {
     local name="$1" ver="${2:-}"
+    if [ "$UPDATE" = "1" ]; then
+        log "$name present${ver:+ ($ver)} — updating because --update was given"
+        return 0
+    fi
     ok "$name already installed${ver:+ ($ver)}"
     exit 0
 }

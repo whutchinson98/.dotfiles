@@ -20,15 +20,18 @@ fi
 
 if have go; then
     current="$(go version | awk '{print $3}')"
+    # Already current: nothing to do, even under --update. Re-extracting an
+    # identical tarball would only cost a download and a sudo rm -rf.
     if [ "$current" = "$ver" ]; then
-        already go "$current"
+        ok "go already at the current version ($current)"
+        exit 0
     fi
     if [ "$UPDATE" != "1" ]; then
         ok "go already installed ($current); latest is $ver"
-        log "to upgrade: just install go --update"
+        log "to upgrade: just update go"
         exit 0
     fi
-    log "go $current installed; updating to $ver"
+    log "updating go $current -> $ver"
 fi
 
 case "$ARCH" in

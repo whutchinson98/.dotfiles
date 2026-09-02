@@ -14,9 +14,12 @@ require_cmd fnm fnm
 want="${NODE_VERSION:-lts-latest}"
 
 if have node; then
-    ok "node already installed ($(node --version))"
-    log "to change versions: fnm install $want && fnm default $want"
-    exit 0
+    if [ "$UPDATE" != "1" ]; then
+        ok "node already installed ($(node --version))"
+        log "to install/switch to $want: just install node --update"
+        exit 0
+    fi
+    log "node $(node --version) present — installing $want because --update was given"
 fi
 
 log "installing node ($want) via fnm"

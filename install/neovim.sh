@@ -23,15 +23,18 @@ tag="${NVIM_VERSION:-$(github_latest_tag neovim/neovim)}"
 
 if have nvim; then
     current="$(nvim --version | head -1 | awk '{print $2}')"
+    # Already current: nothing to do, even under --update. Re-extracting an
+    # identical tarball would only cost a download and a sudo rm -rf.
     if [ "$current" = "$tag" ]; then
-        already nvim "$current"
+        ok "nvim already at the current version ($current)"
+        exit 0
     fi
     if [ "$UPDATE" != "1" ]; then
         ok "nvim already installed ($current); latest is $tag"
-        log "to upgrade: just install neovim --update"
+        log "to upgrade: just update neovim"
         exit 0
     fi
-    log "nvim $current installed; updating to $tag"
+    log "updating nvim $current -> $tag"
 fi
 
 need_sudo

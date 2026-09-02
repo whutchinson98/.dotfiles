@@ -38,13 +38,23 @@ just install-check neovim  # preview it, changing nothing
 just install-all           # install everything missing, in dependency order
 ```
 
-`install-all` never upgrades anything that is already present, so it is safe to
-re-run. The installers that track an upstream version (`go`, `neovim`) report
-when a newer release exists and upgrade only on request:
+`install-all` never touches anything already present, so it is safe to re-run —
+it only fills gaps. Upgrading is a separate, explicit action:
 
 ```sh
-just install go --update
+just update neovim     # update one program
+just update-all        # update everything installed
 ```
+
+Under the hood both pass `--update`, which every installer honours by falling
+through to its normal install path — re-running apt/dnf, the upstream install
+script, `cargo install`, `npm -g`, or a fresh release download, whichever that
+program uses. `go` and `neovim` compare against the upstream version first and
+skip the work when already current. `rust` runs `rustup update`, and `node`
+installs the requested version through fnm.
+
+`update-all` re-runs everything, which means recompiling the cargo tools — it
+is slow by nature.
 
 Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 `NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`.

@@ -201,6 +201,22 @@ install PROG *ARGS:
 install-check PROG:
     @just install {{ PROG }} --dry-run
 
+# Example: just update neovim. Installers leave existing installs alone by
+# default, which is what keeps install-all a safe no-op; --update opts in.
+
+# Update one already-installed program to its current version.
+[group('install')]
+update PROG *ARGS:
+    @just install {{ PROG }} --update {{ ARGS }}
+
+# Re-runs every installer, so it re-downloads release archives and recompiles
+# the cargo tools. Slow; go and neovim skip work when already current.
+
+# Update every installed program.
+[group('install')]
+update-all *ARGS:
+    @just install-all --update {{ ARGS }}
+
 # Install everything that is missing, in dependency order.
 [group('install')]
 install-all *ARGS:

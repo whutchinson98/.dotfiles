@@ -10,7 +10,12 @@ SCRIPT_DESC="Install rustup + the stable toolchain, and rust-analyzer as a compo
 lib_parse_args "$@"
 
 if have rustup; then
-    ok "rustup already installed ($(rustup --version 2>/dev/null | head -1))"
+    if [ "$UPDATE" = "1" ]; then
+        log "updating the rust toolchain (rustup update)"
+        run rustup update
+    else
+        ok "rustup already installed ($(rustup --version 2>/dev/null | head -1))"
+    fi
 else
     ensure_curl
     have cc || pkg_install build-essential gcc
@@ -20,10 +25,10 @@ else
     [ "$DRY_RUN" = "1" ] || . "$HOME/.cargo/env"
 fi
 
-if have rust-analyzer; then
+if have rust-analyzer && [ "$UPDATE" != "1" ]; then
     ok "rust-analyzer already installed"
 else
-    log "adding rust-analyzer component"
+    log "adding/updating the rust-analyzer component"
     run rustup component add rust-analyzer
 fi
 
