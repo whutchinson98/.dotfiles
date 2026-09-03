@@ -8,7 +8,7 @@ decorations = "none"
 [terminal]
 osc52 = "CopyPaste"
 
-[shell]
+[terminal.shell]
 program = "fish"
 
 [font]
