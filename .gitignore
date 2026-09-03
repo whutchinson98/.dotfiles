@@ -3,6 +3,8 @@
 # stray `cp -r` of ~/.pi or ~/.claude into this repo must not leak secrets.
 **/auth.json
 **/.credentials.json
+**/credentials
+**/.aws/cli/
 **/*.key
 **/cookies.json
 .claude.json
