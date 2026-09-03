@@ -57,7 +57,7 @@ installs the requested version through fnm.
 is slow by nature.
 
 Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
-`NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`.
+`NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`, `TAILSCALE_VERSION=1.102.3`.
 
 ### Install methods
 
@@ -67,6 +67,7 @@ Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 | eza, fzf | distro package, falling back to a GitHub release on older distros |
 | fd | distro package `fd-find` (Debian names the binary `fdfind`) |
 | op | 1Password's own apt/dnf repository |
+| tailscale | Tailscale's own apt/dnf repository, added by their install script |
 | starship, mise, fnm, bun, pnpm, claude, herdr, doppler | upstream install script |
 | neovim, go, fonts | official release tarball/zip |
 | rust (rustup) | rustup.rs; rust-analyzer as a rustup component |
@@ -80,6 +81,11 @@ before the cargo tools, go before gopls, fnm before node before pi. Individual
 scripts also guard their own prerequisites, so `just install jj` on a machine
 without cargo tells you to run `just install rust` first rather than failing
 obscurely.
+
+`tailscale` is the one installer that leaves a manual step behind: it installs
+the package and enables `tailscaled`, but joining a tailnet needs a browser or
+an auth key, so it prints a reminder to run `sudo tailscale up` and stops
+there. Nothing in this repo stores tailnet credentials.
 
 `install/` is not a stow package — it, and `docs/`, are listed in
 `NON_PACKAGES`.
