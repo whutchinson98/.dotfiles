@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+access_key_id="$(op read 'op://Private/aws_work/access key id')"
+secret_access_key="$(op read 'op://Private/aws_work/secret access key')"
+
+jq -n \
+  --arg ak "$access_key_id" \
+  --arg sk "$secret_access_key" \
+  '{Version:1, AccessKeyId:$ak, SecretAccessKey:$sk}'
