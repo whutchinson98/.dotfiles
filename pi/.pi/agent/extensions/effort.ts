@@ -6,7 +6,7 @@ const maxEffortLevels = [...baseLevels, "max"] as const;
 type BaseLevel = (typeof baseLevels)[number];
 type EffortLevel = (typeof maxEffortLevels)[number];
 
-const maxEffortModelPatterns = [/gpt[-_. ]?5\.5/i, /fable/i];
+const maxEffortModelPatterns = [/gpt[-_. ]?5\.6/i, /fable/i];
 const effortStateEvent = "pi:effort-state";
 
 let requestedEffortOverride: "max" | undefined;

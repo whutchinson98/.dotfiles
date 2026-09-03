@@ -36,9 +36,7 @@ The VCS status is intentionally Jujutsu-based and does not call `git`.
 
 `initialize-workspace.ts` runs on Pi session startup. It searches from the session cwd up to the nearest `flake.nix`, normalizes the repository paths reported by `jj git remote list`, and continues only when at least one exactly matches a line in `~/workspace-repos`. For matching repositories on NixOS with `direnv` installed, it ensures `.envrc` contains `use flake` and `watch_file nix/*.nix`, then runs `direnv allow` from the flake root.
 
-Managed agent runs set `PI_SUBAGENT=1`. When this extension sees that environment variable and `nix` is available, it overrides only that agent process's `bash` tool with wrappers for `cargo`, `bun`, `npm`, `pnpm`, `go`, `just`, and `doppler`. Invocations of those commands run through `nix develop <flake-root> -c`; all other commands run directly. The main Pi process still uses its normal bash tool.
-
-Builder agents opt in to loading extensions, so the startup hook and subagent-only command wrappers run inside planner-builder's locally managed builder subprocesses.
+Managed agent runs use their standard `bash` tool without command-specific `nix develop` wrappers. Builder agents opt in to loading extensions, so the startup hook runs inside planner-builder's locally managed builder subprocesses as well.
 
 ## Subagents
 
