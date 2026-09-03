@@ -67,7 +67,7 @@ Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 | eza, fzf | distro package, falling back to a GitHub release on older distros |
 | fd | distro package `fd-find` (Debian names the binary `fdfind`) |
 | op | 1Password's own apt/dnf repository |
-| starship, mise, fnm, bun, pnpm, claude, herdr | upstream install script |
+| starship, mise, fnm, bun, pnpm, claude, herdr, doppler | upstream install script |
 | neovim, go, fonts | official release tarball/zip |
 | rust (rustup) | rustup.rs; rust-analyzer as a rustup component |
 | jj, ripgrep, just | `cargo install --locked` |
