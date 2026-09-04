@@ -13,8 +13,8 @@ TARGET := env("HOME")
 NON_PACKAGES := "docs install"
 
 # Install order for `install-all`: prerequisites before their dependants.
-# rust before the cargo tools, go before gopls, fnm before node before pi.
-INSTALL_ORDER := "git stow fish tmux alacritty eza fzf fd fonts starship mise rust jj ripgrep just go gopls neovim fnm node pi bun pnpm pulumi op aws doppler tailscale claude herdr"
+# rust before the cargo tools, go before gopls, fnm before node before pi and codex.
+INSTALL_ORDER := "git stow fish tmux alacritty eza fzf fd fonts starship mise rust jj ripgrep just go gopls neovim fnm node pi codex bun pnpm pulumi op aws doppler tailscale claude herdr"
 
 # Shell snippet that prints one package name per line.
 pkgs := "ls -1 " + REPO + " | while read -r d; do [ -d '" + REPO + "'/\"$d\" ] || continue; case \" " + NON_PACKAGES + " \" in *\" $d \"*) continue;; esac; echo \"$d\"; done"

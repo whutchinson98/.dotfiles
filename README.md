@@ -75,10 +75,11 @@ Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 | jj, ripgrep, just | `cargo install --locked` |
 | node | `fnm install` |
 | pi | `npm install -g @earendil-works/pi-coding-agent` |
+| codex | `npm install -g @openai/codex` |
 | gopls | `go install` |
 
 Dependency order is declared once, in `INSTALL_ORDER` in the justfile: rustup
-before the cargo tools, go before gopls, fnm before node before pi. Individual
+before the cargo tools, go before gopls, fnm before node before pi and codex. Individual
 scripts also guard their own prerequisites, so `just install jj` on a machine
 without cargo tells you to run `just install rust` first rather than failing
 obscurely.
