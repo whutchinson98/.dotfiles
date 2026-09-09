@@ -1,8 +1,8 @@
 -- Port of modules/terminal/neovim/plugins.nix
 --
 -- Under Nix these came from pkgs.vimPlugins and were placed on the runtimepath
--- directly; here lazy.nvim fetches them. Each `config` below is verbatim from
--- the corresponding attribute in plugins.nix.
+-- directly; here lazy.nvim fetches them. Configuration follows plugins.nix,
+-- with Gruvbox replacing Nord as the active colorscheme.
 
 -- Bootstrap lazy.nvim
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
@@ -25,7 +25,6 @@ require("lazy").setup({
   spec = {
     -- Plugins with no configuration of their own in plugins.nix
     { "rafamadriz/friendly-snippets" },
-    { "ellisonleao/gruvbox.nvim" },
     { "neovim/nvim-lspconfig" },
     { "nvim-tree/nvim-web-devicons" },
     { "nvim-lua/plenary.nvim" },
@@ -239,12 +238,14 @@ require("lazy").setup({
     },
 
     {
-      -- Last in plugins.nix, so it wins the colorscheme; priority keeps that
-      -- ordering under lazy.nvim.
-      "shaunsingh/nord.nvim",
+      -- Load the colorscheme before other plugins.
+      "ellisonleao/gruvbox.nvim",
+      lazy = false,
       priority = 1000,
       config = function()
-        vim.cmd("colorscheme nord")
+        vim.o.termguicolors = true
+        vim.o.background = "dark"
+        vim.cmd("colorscheme gruvbox")
         vim.cmd(":hi statusline guibg=NONE")
       end,
     },
@@ -252,7 +253,7 @@ require("lazy").setup({
 
   -- Nix pinned every plugin in the flake lock; lazy-lock.json is the analogue.
   -- No update checker, matching the declarative-config feel.
-  install = { colorscheme = { "nord", "habamax" } },
+  install = { colorscheme = { "gruvbox", "habamax" } },
   checker = { enabled = false },
   change_detection = { notify = false },
 })
