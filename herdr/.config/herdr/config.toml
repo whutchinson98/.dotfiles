@@ -3,3 +3,7 @@ onboarding = false
 [keys]
 split_vertical = "prefix+|"
 split_horizontal = "prefix+minus"
+
+[theme]
+name = "gruvbox"
+auto_switch = false

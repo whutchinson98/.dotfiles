@@ -32,12 +32,6 @@ The VCS status is intentionally Jujutsu-based and does not call `git`.
 
 `file-search/` registers first-class `fd` and `rg` tools. Unlike the upstream example, it does not download fallback binaries at startup; `fd` and `ripgrep` are installed by Nix in `modules/dev/ai.nix`. It probes all PATH candidates and uses the first executable that actually runs, so stale downloaded binaries under `~/.pi/agent/bin` do not shadow the Nix binaries.
 
-## Workspace initialization
-
-`initialize-workspace.ts` runs on Pi session startup. It searches from the session cwd up to the nearest `flake.nix`, normalizes the repository paths reported by `jj git remote list`, and continues only when at least one exactly matches a line in `~/workspace-repos`. For matching repositories on NixOS with `direnv` installed, it ensures `.envrc` contains `use flake` and `watch_file nix/*.nix`, then runs `direnv allow` from the flake root.
-
-Managed agent runs use their standard `bash` tool without command-specific `nix develop` wrappers. Builder agents opt in to loading extensions, so the startup hook runs inside planner-builder's locally managed builder subprocesses as well.
-
 ## Subagents
 
 `subagent/` registers:
