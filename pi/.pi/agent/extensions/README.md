@@ -52,14 +52,14 @@ Subagent calls open a full-screen dashboard modeled after `davis7dotsh/my-pi-set
 | Tool | Purpose |
 | --- | --- |
 | `plan_file_create` | Run the `planner` agent with the model and effort selected in the main pi process, show its live output in the full-screen subagent dashboard, surface material planner questions through the parent UI, and save a structured plan file under `.pi/plans`. |
-| `plan_file_build` | Create ready independent task workspaces with `jj workspace add`, run each `builder` as a locally managed structured subprocess in parallel, stream output into the main dashboard, and serially integrate each atomic `jj` commit. Verifier review is skipped by default; set `runVerifier: true` to run the unchanged structured `verifier` subprocess with the same selection and write `.pi/outputs/findings.html`. |
+| `plan_file_build` | Auto-select jj workspaces when checkout `.jj` metadata exists, otherwise Git worktrees. Run independent builders in parallel and serially integrate one non-empty commit per task. Git requires locally committed clean source on an attached branch (not pushed) and safely fast-forwards from a separate integration checkout. Verifier review is skipped by default; set `runVerifier: true` to run the unchanged structured `verifier` subprocess with the same selection and write `.pi/outputs/findings.html`. |
 | `plan_file_list` | List recent plan files. |
 
-It also registers `/plan-create`, `/plan-build`, and `/plan-list`. Pass `--verify` to `/plan-build` to opt into verifier review. Plan builds create workspaces under `PI_PLAN_WORKSPACE_ROOT` or `~/.pi/plan-workspaces` by running `jj workspace add --name <workspace> <path> -r <integrated-head>` directly.
+It also registers `/plan-create`, `/plan-build`, and `/plan-list`. Pass `--verify` to `/plan-build` to opt into verifier review. Plan builds create checkouts under `PI_PLAN_WORKSPACE_ROOT` or `~/.pi/plan-workspaces` using `jj workspace add` or `git worktree add` from the latest integrated head. Colocated repos prefer jj; broken jj is an error, never a Git fallback. See [planner-builder/README.md](planner-builder/README.md) for Git preconditions, narrow plan/report exemptions, explicit verifier bases and durable recovery instructions.
 
 Builder output is streamed from each subprocess into the main planner-builder dashboard. Cancellation and stuck handling terminate the local subprocess, and stuck restarts launch a new subprocess in the same checkout. The last standalone, unfenced `PLAN_TASK_RESULT: done|failed|blocked` line classifies the completed task before commit validation.
 
-Successfully integrated workspaces are forgotten by Jujutsu and deleted. Failed, blocked, cancelled, stuck-exhausted, validation-failed, or conflicted workspaces are retained for inspection. Planner questions and optional verifier review retain their existing locally spawned structured subprocess behavior.
+Successfully integrated jj workspaces are forgotten and deleted. Git cleans up only after safe source finalization, without force-removing new work; interrupted builds retain an integration branch/worktree and recovery JSON. Failed, blocked, cancelled, stuck-exhausted, validation-failed, or conflicted workspaces are retained for inspection. Planner questions and optional verifier review retain their existing locally spawned structured subprocess behavior.
 
 ## Remote MCP extensions
 

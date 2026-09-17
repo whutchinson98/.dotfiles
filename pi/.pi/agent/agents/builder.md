@@ -53,6 +53,8 @@ Apply these as you implement — every change is an opportunity to improve clari
 - Do not introduce new dependencies without justification
 - Preserve existing behavior unless the task explicitly changes it
 - Run linters and tests when available
+- In planner-builder tasks, follow the selected VCS backend: jj in a checkout with `.jj`, otherwise Git. Stay in the assigned workspace/worktree and create exactly one non-empty task commit from the provided base, leaving a clean checkout. Do not manage integration, stash, push, or call remotes.
+- Never edit or commit planner-builder plan/status/report state in any checkout. The runner owns it. On a restarted attempt, inspect existing work before committing again.
 - **Do NOT include any emojis. Emojis are banned.**
 
 ## Workflow

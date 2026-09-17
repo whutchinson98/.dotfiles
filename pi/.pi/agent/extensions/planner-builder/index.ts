@@ -41,6 +41,7 @@ import {
   showPlanBuildDashboard,
 } from "./dashboard";
 import { parsePlanTaskResultMarker } from "./result-marker";
+import { detectVcs, GitBackend, type TaskWorkspace, type VcsKind } from "./vcs.ts";
 
 const DEFAULT_PLANNER_AGENT = "planner";
 const DEFAULT_BUILDER_AGENT = "builder";
@@ -169,14 +170,6 @@ interface PlanBuildResult {
   integrationMessage?: string;
 }
 
-interface TaskWorkspace {
-  name: string;
-  rootPath: string;
-  cwd: string;
-  baseRevision: string;
-}
-
-
 interface TaskRunContext {
   task: PlanTask;
   workspace: TaskWorkspace;
@@ -266,7 +259,7 @@ const PlanBuildParams = Type.Object({
   agentScope: Type.Optional(AgentScopeSchema),
   maxConcurrency: Type.Optional(
     Type.Number({
-      description: `Maximum number of builder agents to run at once. Default: ${DEFAULT_MAX_CONCURRENCY}, max: ${MAX_CONCURRENCY}. Parallel tasks run in separate Jujutsu workspaces and are integrated serially.`,
+      description: `Maximum number of builder agents to run at once. Default: ${DEFAULT_MAX_CONCURRENCY}, max: ${MAX_CONCURRENCY}. Parallel tasks run in separate jj workspaces or Git worktrees and are integrated serially.`,
       default: DEFAULT_MAX_CONCURRENCY,
       minimum: 1,
       maximum: MAX_CONCURRENCY,
@@ -560,7 +553,10 @@ function createPlannerTask(request: string, builderAgent: string): string {
     request,
     "",
     "The output will be saved as a plan file and consumed by an extension that dispatches task blocks to builder agents.",
-    `Assume each task will be implemented by a separate \`${builderAgent}\` agent and should become its own atomic Jujutsu (\`jj\`) commit.`,
+    `Assume each task will be implemented by a separate \`${builderAgent}\` agent and should become its own atomic commit using the checkout's VCS.`,
+    "Use jj only when the nearest checkout has .jj metadata (prefer jj when colocated). Otherwise use Git. A nested .git checkout is a boundary; do not inherit an outer .jj.",
+    "Git builds require an attached feature branch with locally committed source changes and a clean index/worktree, including untracked source. No push is required. Only the active plan and findings report are exempt.",
+    "Never assign builders changes to the plan file or runner-owned status/report output.",
     "",
     "Requirements:",
     "- Analyze the actual repository before planning.",
@@ -1443,7 +1439,22 @@ async function createPlanFile(
   return { text, details };
 }
 
-function createBuilderTask(planPath: string, task: PlanTask, fullPlan: string): string {
+function createBuilderTask(planPath: string, task: PlanTask, fullPlan: string, kind: VcsKind = "jj", baseRevision?: string): string {
+  const vcsRules = kind === "git" ? [
+    "- You are already inside a dedicated Git worktree on an attached temporary task branch. Use Git, not jj.",
+    "- Inspect `git status --short` before editing. Do not create/switch/delete branches or worktrees, rebase, merge, reset, stash, push, or call remotes. The runner manages integration.",
+    `- Your exact base commit is ${baseRevision}. Create exactly one non-empty commit whose only parent is that base: stage only task source files, then git commit -m ${JSON.stringify(`${task.id}: ${task.title}`)}.`,
+    "- Leave HEAD at that commit on the assigned branch, with a clean index and worktree (including untracked source files). Do not amend the base or add a second commit, including on a restarted attempt.",
+    "- The runner validates your commit and cherry-picks it serially into a separate integration worktree, then safely fast-forwards the original branch.",
+  ] : [
+    "- You are already running inside a dedicated Jujutsu workspace for this task.",
+    "- Do not create, forget, switch, rebase, merge, or otherwise manage Jujutsu workspaces; the planner-builder extension handles workspace integration.",
+    "- Use Jujutsu (`jj`) for version-control operations; do not use Git.",
+    "- Before editing, inspect `jj status --no-pager` so you know the task workspace state.",
+    `- After implementation and verification pass, create exactly one atomic Jujutsu commit for this task's changes before your final response (for example: \`jj commit -m ${JSON.stringify(`${task.id}: ${task.title}`)}\`).`,
+    "- Leave the task workspace with a clean/empty working-copy commit after that task commit; do not make extra edits after committing.",
+    "- The main planner-builder loop will rebase/integrate your task commit on top of the main workspace after you finish.",
+  ];
   return [
     "You are implementing one task from a planner-created multi-agent plan file.",
     "",
@@ -1452,16 +1463,10 @@ function createBuilderTask(planPath: string, task: PlanTask, fullPlan: string): 
     "",
     "Rules:",
     "- Implement only the assigned task unless a direct dependency is required to make it work.",
-    "- You are already running inside a dedicated Jujutsu workspace for this task.",
-    "- Do not create, forget, switch, rebase, merge, or otherwise manage Jujutsu workspaces; the planner-builder extension handles workspace integration.",
-    "- Do not edit the plan file; it may not exist in this task workspace and the planner-builder extension updates task statuses from the main workspace.",
+    ...vcsRules,
+    "- Never edit or commit the plan file or runner-owned status/report output in ANY checkout, including the source workspace. The runner alone updates plan state.",
     "- Avoid unrelated refactors and unrelated files.",
-    "- Use Jujutsu (`jj`) for version-control operations; do not use Git.",
-    "- Before editing, inspect `jj status --no-pager` so you know the task workspace state.",
-    `- After implementation and verification pass, create exactly one atomic Jujutsu commit for this task's changes before your final response (for example: \`jj commit -m ${JSON.stringify(`${task.id}: ${task.title}`)}\`).`,
-    "- Leave the task workspace with a clean/empty working-copy commit after that task commit; do not make extra edits after committing.",
-    "- The main planner-builder loop will rebase/integrate your task commit on top of the main workspace after you finish.",
-    "- Only report `PLAN_TASK_RESULT: done` after the Jujutsu commit succeeds. If you cannot safely create exactly one atomic commit, report `PLAN_TASK_RESULT: blocked` or `PLAN_TASK_RESULT: failed` and explain why.",
+    "- Only report `PLAN_TASK_RESULT: done` after the task commit succeeds. If you cannot safely create exactly one atomic commit, report `PLAN_TASK_RESULT: blocked` or `PLAN_TASK_RESULT: failed` and explain why.",
     "- Read relevant files before editing and follow existing patterns.",
     "- Run focused verification. If no useful automated check exists, explain the manual verification performed.",
     "- If blocked, do not force changes. Explain the blocker.",
@@ -1477,7 +1482,7 @@ function createBuilderTask(planPath: string, task: PlanTask, fullPlan: string): 
   ].join("\n");
 }
 
-function createVerifierTask(planPath: string, results: PlanBuildResult[]): string {
+function createVerifierTask(planPath: string, results: PlanBuildResult[], kind: VcsKind, reviewBase: string): string {
   const summary = results.length
     ? results.map((result) => `- ${result.task.id} ${result.status}: ${result.task.title}`).join("\n")
     : "- No builder tasks were run.";
@@ -1488,13 +1493,16 @@ function createVerifierTask(planPath: string, results: PlanBuildResult[]): strin
     `Plan file: ${planPath}`,
     "",
     "The planner-builder extension has finished running builder task workspaces and integrating completed task commits onto the current main workspace.",
-    "Review the repository's current changes against the `main` bookmark and write the required HTML findings report.",
+    `VCS backend: ${kind}. Explicit review base: ${reviewBase}. Review the net changes from that base to ${kind === "git" ? "HEAD" : "@"} and write the required HTML findings report.`,
+    kind === "git"
+      ? `Use git diff ${reviewBase} HEAD and git log ${reviewBase}..HEAD; inspect git status separately. No remote calls or push.`
+      : `Use jj diff --from ${reviewBase} --to @ and jj log -r '${reviewBase}..@'.`,
     "",
     "Builder task results:",
     summary,
     "",
     "Follow your verifier agent instructions exactly:",
-    "- Use Jujutsu (`jj`), not Git.",
+    `- Use ${kind === "git" ? "Git, not jj" : "Jujutsu (jj), not Git"}; use the explicit review base above, not an assumed main branch/bookmark.`,
     "- Write `.pi/outputs/findings.html` at the repository root.",
     "- Do not modify any other files.",
   ].join("\n");
@@ -1780,11 +1788,15 @@ async function listRevisionConflicts(cwd: string, revset: string): Promise<strin
 }
 
 async function taskWorkspaceRoot(repositoryRoot: string, workspaceName: string): Promise<string> {
+  return path.join(await taskWorkspaceDirectory(repositoryRoot), workspaceName);
+}
+
+async function taskWorkspaceDirectory(repositoryRoot: string): Promise<string> {
   const root = process.env.PI_PLAN_WORKSPACE_ROOT?.trim() || DEFAULT_TASK_WORKSPACE_ROOT;
   const expandedRoot = expandHomePath(root);
   const workspaceDirectory = path.join(path.resolve(expandedRoot), path.basename(repositoryRoot));
   await fs.promises.mkdir(workspaceDirectory, { recursive: true });
-  return path.join(workspaceDirectory, workspaceName);
+  return workspaceDirectory;
 }
 
 async function createTaskWorkspace(
@@ -1819,7 +1831,7 @@ async function cleanupTaskWorkspace(mainCwd: string, workspace: TaskWorkspace): 
   await fs.promises.rm(workspace.rootPath, { recursive: true, force: true });
 }
 
-async function validateTaskWorkspaceCommit(workspace: TaskWorkspace): Promise<TaskCommitInfo> {
+async function validateTaskWorkspaceCommit(workspace: TaskWorkspace, protectedPaths: string[] = []): Promise<TaskCommitInfo> {
   const hasUncommittedDiff = await revisionHasDiff(workspace.cwd, "@");
   if (hasUncommittedDiff) {
     throw new Error("Task workspace still has uncommitted changes in its working-copy commit. The builder must create exactly one commit and leave @ empty.");
@@ -1837,6 +1849,13 @@ async function validateTaskWorkspaceCommit(workspace: TaskWorkspace): Promise<Ta
     throw new Error(`Task commit ${commit.commitId} is empty.`);
   }
 
+  if (protectedPaths.length > 0) {
+    const changed = await runJj(workspace.rootPath, ["diff", "-r", commit.commitId, "--name-only"]);
+    if (changed.stdout.split(/\r?\n/).some((file) => protectedPaths.includes(file))) {
+      throw new Error("Builders must not edit or commit runner-owned plan/report state.");
+    }
+  }
+
   return commit;
 }
 
@@ -1845,6 +1864,7 @@ async function integrateTaskWorkspace(
   workspace: TaskWorkspace,
   result: PlanBuildResult,
   integratedHead: string,
+  protectedPaths: string[] = [],
 ): Promise<{ result: PlanBuildResult; integratedHead: string }> {
   if (result.status !== "done") {
     result.integrationMessage = result.workspacePath ? `Workspace kept for inspection at ${result.workspacePath}.` : undefined;
@@ -1853,7 +1873,7 @@ async function integrateTaskWorkspace(
 
   let commit: TaskCommitInfo;
   try {
-    commit = await validateTaskWorkspaceCommit(workspace);
+    commit = await validateTaskWorkspaceCommit(workspace, protectedPaths);
   } catch (error) {
     result.status = "failed";
     result.integrationMessage = `${commandErrorMessage(error)} Workspace kept for inspection at ${workspace.rootPath}.`;
@@ -1896,6 +1916,23 @@ async function integrateTaskWorkspace(
   }
 
   return { result, integratedHead: rebasedCommitId };
+}
+
+async function integrateGitTask(
+  backend: GitBackend,
+  taskRun: TaskRunContext,
+  integratedHead: string,
+): Promise<{ result: PlanBuildResult; integratedHead: string }> {
+  const { result, workspace } = taskRun;
+  if (result.status !== "done") {
+    result.integrationMessage = `Task worktree retained at ${workspace.rootPath}.\n${backend.recoveryInstructions()}`;
+    return { result, integratedHead };
+  }
+  const integration = await backend.integrate(workspace);
+  result.status = integration.status;
+  result.commitId = integration.commitId;
+  result.integrationMessage = integration.message;
+  return { result, integratedHead: integration.integratedHead };
 }
 
 async function restorePlanFileAfterWorkspaceMove(absolutePath: string, content: string): Promise<void> {
@@ -1973,216 +2010,245 @@ async function buildPlanFile(
   );
 
   if (!fs.existsSync(absolutePath)) throw new Error(`Plan file not found: ${relativePath}`);
+  if (parsePlanTasks(await fs.promises.readFile(absolutePath, "utf8")).length === 0) {
+    throw new Error(`No builder tasks found in ${relativePath}.`);
+  }
 
-  const sourceWorkspaceRoot = await getJjWorkspaceRoot(ctx.cwd);
-  const repositoryRoot = await getMainJjWorkspaceRoot(sourceWorkspaceRoot);
-  const initialHead = await getCommitId(ctx.cwd, "@");
+  signal?.throwIfAborted();
+  const vcs = await detectVcs(ctx.cwd);
+  const sourceWorkspaceRoot = vcs.root;
+  const repositoryRoot = vcs.kind === "jj" ? await getMainJjWorkspaceRoot(sourceWorkspaceRoot) : sourceWorkspaceRoot;
+  const protectedPaths = [path.relative(sourceWorkspaceRoot, absolutePath), ".pi/outputs/findings.html"];
+  const gitBackend = vcs.kind === "git"
+    ? await GitBackend.start(ctx.cwd, sourceWorkspaceRoot, absolutePath, await taskWorkspaceDirectory(repositoryRoot))
+    : undefined;
+  const initialHead = gitBackend?.initialHead ?? await getCommitId(ctx.cwd, "@");
   let integratedHead = initialHead;
+  const cleanupWarnings: string[] = [];
 
-  while (true) {
-    const content = await fs.promises.readFile(absolutePath, "utf8");
-    const tasks = parsePlanTasks(content);
-    if (tasks.length === 0) throw new Error(`No builder tasks found in ${relativePath}.`);
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+      const content = await fs.promises.readFile(absolutePath, "utf8");
+      const tasks = parsePlanTasks(content);
+      if (tasks.length === 0) throw new Error(`No builder tasks found in ${relativePath}.`);
 
-    const tasksById = new Map(tasks.map((task) => [task.id, task]));
-    const candidates = tasks.filter((task) => {
-      if (attempted.has(task.id)) return false;
-      if (targetIds.size > 0) return targetIds.has(task.id) && task.status !== "done";
-      return isDefaultRunnableStatus(task.status);
-    });
-
-    const ready = candidates.filter((task) => taskDependenciesSatisfied(task, tasksById));
-    const blocked = candidates.filter((task) => !taskDependenciesSatisfied(task, tasksById));
-
-    if (ready.length === 0) {
-      for (const task of blocked) {
-        skipped.push({ id: task.id, title: task.title, reason: taskBlockerReason(task, tasksById) });
-      }
-      break;
-    }
-
-    const batch = selectParallelTaskBatch(ready, maxConcurrency);
-    if (batch.length === 0) {
-      for (const task of blocked) {
-        skipped.push({ id: task.id, title: task.title, reason: taskBlockerReason(task, tasksById) });
-      }
-      break;
-    }
-
-    onUpdate?.({
-      content: [
-        {
-          type: "text",
-          text: `Running ${batch.length} of ${ready.length} ready task${ready.length === 1 ? "" : "s"} from ${relativePath} with ${builderAgent} on ${model} (${effort} effort) in parallel Jujutsu workspaces...`,
-        },
-      ],
-      details: detailsFor(),
-    });
-
-    const launches: Array<{
-      task: PlanTask;
-      workspace: TaskWorkspace;
-      prompt: string;
-    }> = [];
-    for (const item of batch) {
-      attempted.add(item.task.id);
-      const workspace = await createTaskWorkspace(
-        ctx.cwd,
-        sourceWorkspaceRoot,
-        repositoryRoot,
-        item.task,
-        integratedHead,
-      );
-      await updatePlanTaskStatus(absolutePath, item.task.id, "in-progress");
-
-      const latestContent = await fs.promises.readFile(absolutePath, "utf8");
-      const latestTask = parsePlanTasks(latestContent).find((candidate) => candidate.id === item.task.id) ?? item.task;
-      launches.push({
-        task: latestTask,
-        workspace,
-        prompt: createBuilderTask(relativePath, latestTask, latestContent),
-      });
-      agentViews.set(latestTask.id, {
-        id: latestTask.id,
-        title: latestTask.title,
-        agent: builderAgent,
-        model,
-        status: "starting",
-        output: "",
-        progress: `Workspace ${workspace.name} is ready; starting agent...`,
-        workspaceName: workspace.name,
-        workspacePath: workspace.rootPath,
-      });
-    }
-
-    onUpdate?.({
-      content: [{ type: "text", text: `Started ${launches.length} builder agent${launches.length === 1 ? "" : "s"}.` }],
-      details: detailsFor(),
-    });
-
-    const runLaunch = async (launch: (typeof launches)[number]): Promise<TaskRunContext> => {
-      try {
-        const run = await runBuilderInWorkspace(
-          launch.workspace,
-          agents,
-          builderAgent,
-          launch.prompt,
-          { model, effort, monitor },
-          signal,
-          (agentResult) => {
-            const status = agentResult.progressMessage
-              ? `${launch.task.id}: ${agentResult.progressMessage}`
-              : `${launch.task.id}: ${builderAgent} is running on ${model} (${effort} effort) in ${launch.workspace.name}...`;
-
-            updateAgentView(launch.task.id, {
-              status: "running",
-              output: agentOutput(agentResult),
-              progress: agentResult.progressMessage ?? status,
-              restartCount: agentResult.restartCount,
-            });
-            onUpdate?.({
-              content: [{ type: "text", text: status }],
-              details: detailsFor(),
-            });
-          },
-        );
-        const classification = classifyBuilderResult(run);
-        updateAgentView(launch.task.id, {
-          status: classification.status === "done" ? "integrating" : classification.status,
-          output: agentOutput(run),
-          progress: classification.status === "done" ? "Agent finished; validating and integrating its commit..." : run.progressMessage,
-          exitCode: run.exitCode,
-          restartCount: run.restartCount,
-        });
-        onUpdate?.({
-          content: [{ type: "text", text: `${launch.task.id}: agent finished; processing result...` }],
-          details: detailsFor(),
-        });
-        return {
-          task: launch.task,
-          workspace: launch.workspace,
-          result: {
-            task: launch.task,
-            run,
-            status: classification.status,
-            marker: classification.marker,
-            workspaceName: launch.workspace.name,
-            workspacePath: launch.workspace.rootPath,
-          },
-        };
-      } catch (error) {
-        const run = createFailedAgentResult(builderAgent, launch.prompt, launch.workspace.cwd, commandErrorMessage(error), model, effort);
-        updateAgentView(launch.task.id, {
-          status: "failed",
-          output: agentOutput(run),
-          progress: run.stderr,
-          exitCode: run.exitCode,
-        });
-        return {
-          task: launch.task,
-          workspace: launch.workspace,
-          result: {
-            task: launch.task,
-            run,
-            status: "failed",
-            workspaceName: launch.workspace.name,
-            workspacePath: launch.workspace.rootPath,
-            integrationMessage: `Workspace kept for inspection at ${launch.workspace.rootPath}.`,
-          },
-        };
-      }
-    };
-
-    const running = launches.map((launch) => runLaunch(launch));
-    while (running.length > 0) {
-      const completed = await Promise.race(running.map((promise, index) => promise.then((taskRun) => ({ index, taskRun }))));
-      running.splice(completed.index, 1);
-
-      const finalized = await integrateTaskWorkspace(ctx.cwd, completed.taskRun.workspace, completed.taskRun.result, integratedHead);
-      integratedHead = finalized.integratedHead;
-      results.push(finalized.result);
-      updateAgentView(completed.taskRun.task.id, {
-        status: finalized.result.status,
-        output: agentOutput(finalized.result.run),
-        progress: finalized.result.integrationMessage ?? `${completed.taskRun.task.id} ${finalized.result.status}.`,
-        exitCode: finalized.result.run.exitCode,
-        restartCount: finalized.result.run.restartCount,
+      const tasksById = new Map(tasks.map((task) => [task.id, task]));
+      const candidates = tasks.filter((task) => {
+        if (attempted.has(task.id)) return false;
+        if (targetIds.size > 0) return targetIds.has(task.id) && task.status !== "done";
+        return isDefaultRunnableStatus(task.status);
       });
 
-      await updatePlanTaskStatus(absolutePath, completed.taskRun.task.id, finalized.result.status, builderResultLog(finalized.result));
-      notifyPlannerBuilder(`Plan task ${completed.taskRun.task.id} ${finalized.result.status}: ${completed.taskRun.task.title}`);
+      const ready = candidates.filter((task) => taskDependenciesSatisfied(task, tasksById));
+      const blocked = candidates.filter((task) => !taskDependenciesSatisfied(task, tasksById));
+
+      if (ready.length === 0) {
+        for (const task of blocked) {
+          skipped.push({ id: task.id, title: task.title, reason: taskBlockerReason(task, tasksById) });
+        }
+        break;
+      }
+
+      const batch = selectParallelTaskBatch(ready, maxConcurrency);
+      if (batch.length === 0) {
+        for (const task of blocked) {
+          skipped.push({ id: task.id, title: task.title, reason: taskBlockerReason(task, tasksById) });
+        }
+        break;
+      }
 
       onUpdate?.({
         content: [
           {
             type: "text",
-            text: `${completed.taskRun.task.id} ${finalized.result.status}; latest integrated head is ${integratedHead}.`,
+            text: `Running ${batch.length} of ${ready.length} ready task${ready.length === 1 ? "" : "s"} from ${relativePath} with ${builderAgent} on ${model} (${effort} effort) in parallel ${vcs.kind === "git" ? "Git worktrees" : "Jujutsu workspaces"}...`,
           },
         ],
         details: detailsFor(),
       });
+
+      const launches: Array<{
+        task: PlanTask;
+        workspace: TaskWorkspace;
+        prompt: string;
+      }> = [];
+      for (const item of batch) {
+        attempted.add(item.task.id);
+        const workspace = gitBackend
+          ? await gitBackend.createWorkspace(item.task.id)
+          : await createTaskWorkspace(ctx.cwd, sourceWorkspaceRoot, repositoryRoot, item.task, integratedHead);
+        await updatePlanTaskStatus(absolutePath, item.task.id, "in-progress");
+
+        const latestContent = await fs.promises.readFile(absolutePath, "utf8");
+        const latestTask = parsePlanTasks(latestContent).find((candidate) => candidate.id === item.task.id) ?? item.task;
+        launches.push({
+          task: latestTask,
+          workspace,
+          prompt: createBuilderTask(absolutePath, latestTask, latestContent, vcs.kind, workspace.baseRevision),
+        });
+        agentViews.set(latestTask.id, {
+          id: latestTask.id,
+          title: latestTask.title,
+          agent: builderAgent,
+          model,
+          status: "starting",
+          output: "",
+          progress: `Workspace ${workspace.name} is ready; starting agent...`,
+          workspaceName: workspace.name,
+          workspacePath: workspace.rootPath,
+        });
+      }
+
+      onUpdate?.({
+        content: [{ type: "text", text: `Started ${launches.length} builder agent${launches.length === 1 ? "" : "s"}.` }],
+        details: detailsFor(),
+      });
+
+      const batchController = new AbortController();
+      const abortBatch = () => batchController.abort();
+      if (signal?.aborted) abortBatch();
+      else signal?.addEventListener("abort", abortBatch, { once: true });
+
+      const runLaunch = async (launch: (typeof launches)[number]): Promise<TaskRunContext> => {
+        try {
+          const run = await runBuilderInWorkspace(
+            launch.workspace,
+            agents,
+            builderAgent,
+            launch.prompt,
+            { model, effort, monitor },
+            batchController.signal,
+            (agentResult) => {
+              const status = agentResult.progressMessage
+                ? `${launch.task.id}: ${agentResult.progressMessage}`
+                : `${launch.task.id}: ${builderAgent} is running on ${model} (${effort} effort) in ${launch.workspace.name}...`;
+
+              updateAgentView(launch.task.id, {
+                status: "running",
+                output: agentOutput(agentResult),
+                progress: agentResult.progressMessage ?? status,
+                restartCount: agentResult.restartCount,
+              });
+              onUpdate?.({
+                content: [{ type: "text", text: status }],
+                details: detailsFor(),
+              });
+            },
+          );
+          const classification = classifyBuilderResult(run);
+          updateAgentView(launch.task.id, {
+            status: classification.status === "done" ? "integrating" : classification.status,
+            output: agentOutput(run),
+            progress: classification.status === "done" ? "Agent finished; validating and integrating its commit..." : run.progressMessage,
+            exitCode: run.exitCode,
+            restartCount: run.restartCount,
+          });
+          onUpdate?.({
+            content: [{ type: "text", text: `${launch.task.id}: agent finished; processing result...` }],
+            details: detailsFor(),
+          });
+          return {
+            task: launch.task,
+            workspace: launch.workspace,
+            result: {
+              task: launch.task,
+              run,
+              status: classification.status,
+              marker: classification.marker,
+              workspaceName: launch.workspace.name,
+              workspacePath: launch.workspace.rootPath,
+            },
+          };
+        } catch (error) {
+          const run = createFailedAgentResult(builderAgent, launch.prompt, launch.workspace.cwd, commandErrorMessage(error), model, effort);
+          updateAgentView(launch.task.id, {
+            status: "failed",
+            output: agentOutput(run),
+            progress: run.stderr,
+            exitCode: run.exitCode,
+          });
+          return {
+            task: launch.task,
+            workspace: launch.workspace,
+            result: {
+              task: launch.task,
+              run,
+              status: "failed",
+              workspaceName: launch.workspace.name,
+              workspacePath: launch.workspace.rootPath,
+              integrationMessage: `Workspace kept for inspection at ${launch.workspace.rootPath}.`,
+            },
+          };
+        }
+      };
+
+      const running = launches.map((launch) => runLaunch(launch));
+      try {
+        while (running.length > 0) {
+          const completed = await Promise.race(running.map((promise, index) => promise.then((taskRun) => ({ index, taskRun }))));
+          running.splice(completed.index, 1);
+
+          const finalized = gitBackend
+            ? await integrateGitTask(gitBackend, completed.taskRun, integratedHead)
+            : await integrateTaskWorkspace(ctx.cwd, completed.taskRun.workspace, completed.taskRun.result, integratedHead, protectedPaths);
+          integratedHead = finalized.integratedHead;
+          results.push(finalized.result);
+          updateAgentView(completed.taskRun.task.id, {
+            status: finalized.result.status,
+            output: agentOutput(finalized.result.run),
+            progress: finalized.result.integrationMessage ?? `${completed.taskRun.task.id} ${finalized.result.status}.`,
+            exitCode: finalized.result.run.exitCode,
+            restartCount: finalized.result.run.restartCount,
+          });
+
+          await updatePlanTaskStatus(absolutePath, completed.taskRun.task.id, finalized.result.status, builderResultLog(finalized.result));
+          notifyPlannerBuilder(`Plan task ${completed.taskRun.task.id} ${finalized.result.status}: ${completed.taskRun.task.title}`);
+
+          onUpdate?.({
+            content: [
+              {
+                type: "text",
+                text: `${completed.taskRun.task.id} ${finalized.result.status}; latest integrated head is ${integratedHead}.`,
+              },
+            ],
+            details: detailsFor(),
+          });
+        }
+      } finally {
+        // On runner errors, stop and join siblings before returning their retained worktrees.
+        batchController.abort();
+        signal?.removeEventListener("abort", abortBatch);
+        await Promise.allSettled(running);
+      }
+
+      onUpdate?.({
+        content: [
+          {
+            type: "text",
+            text: `Completed ${results.length} task${results.length === 1 ? "" : "s"} from ${relativePath}; latest integrated head is ${integratedHead}.`,
+          },
+        ],
+        details: detailsFor(),
+      });
+
+      if (signal?.aborted) break;
     }
 
-    onUpdate?.({
-      content: [
-        {
-          type: "text",
-          text: `Completed ${results.length} task${results.length === 1 ? "" : "s"} from ${relativePath}; latest integrated head is ${integratedHead}.`,
-        },
-      ],
-      details: detailsFor(),
-    });
-
-    if (signal?.aborted) break;
+    if (gitBackend) {
+      // Unlike jj, Git preserves the untouched plan path during fast-forward; never overwrite it from a snapshot.
+      cleanupWarnings.push(...await withFileMutationQueue(absolutePath, () => gitBackend.finalize(signal)));
+    } else if (integratedHead !== initialHead) {
+      const finalPlanContent = await fs.promises.readFile(absolutePath, "utf8");
+      await runJj(ctx.cwd, ["new", integratedHead]);
+      await restorePlanFileAfterWorkspaceMove(absolutePath, finalPlanContent);
+    }
+  } catch (error) {
+    if (gitBackend) throw new Error(`${commandErrorMessage(error)}\n${gitBackend.recoveryInstructions()}`);
+    throw error;
   }
 
-  if (integratedHead !== initialHead) {
-    const finalPlanContent = await fs.promises.readFile(absolutePath, "utf8");
-    await runJj(ctx.cwd, ["new", integratedHead]);
-    await restorePlanFileAfterWorkspaceMove(absolutePath, finalPlanContent);
-  }
-
-  if (runVerifier) {
+  if (runVerifier && !signal?.aborted) {
     agentViews.set("VERIFIER", {
       id: "VERIFIER",
       title: "Review integrated changes and write findings report",
@@ -2201,7 +2267,7 @@ async function buildPlanFile(
       ctx.cwd,
       agents,
       verifierAgent,
-      createVerifierTask(relativePath, results),
+      createVerifierTask(absolutePath, results, vcs.kind, gitBackend?.reviewBase ?? "main"),
       { model, effort },
       signal,
       (agentResult) => {
@@ -2263,6 +2329,7 @@ async function buildPlanFile(
     `Plan build finished for ${relativePath}.`,
     `Results: ${doneCount} done, ${failedCount} failed, ${blockedCount} blocked, ${skipped.length} skipped.`,
     verifierText,
+    cleanupWarnings.length ? `Cleanup warnings:\n${cleanupWarnings.join("\n")}` : "",
     summaryLines.length ? `\nTasks:\n${summaryLines.join("\n")}` : "",
     skippedLines.length ? `\nSkipped:\n${skippedLines.join("\n")}` : "",
   ]
@@ -2565,16 +2632,17 @@ export default function (pi: ExtensionAPI) {
     name: "plan_file_build",
     label: "Build Plan File",
     description:
-      "Run builder agents with the model and effort selected in the main pi process for ready tasks in a planner-created plan file. Independent tasks run in parallel Jujutsu workspaces created with `jj workspace add`, then are integrated serially onto the main workspace. Set runVerifier to true to run the verifier agent afterward and write .pi/outputs/findings.html.",
-    promptSnippet: "Run builder agents with the current model and effort in separate Jujutsu workspaces; optionally run verifier afterward.",
+      "Run builder agents with the model and effort selected in the main pi process for ready tasks in a planner-created plan file. Auto-selects jj when checkout .jj metadata exists (including colocated repos), otherwise Git worktrees. Independent tasks run in parallel and commits integrate serially. Git requires an attached feature branch and locally committed, clean source (no push); only the active plan and findings report are exempt. No stash, snapshot commits, or remotes. Set runVerifier to true to run the verifier agent afterward and write .pi/outputs/findings.html.",
+    promptSnippet: "Run builder agents in auto-selected jj workspaces or Git worktrees, safely integrate one commit per task, and optionally verify.",
     promptGuidelines: [
       "Use plan_file_build when the user asks builder agents to implement tasks from a plan file.",
       "Use plan_file_build only after a plan file exists, usually from plan_file_create.",
-      "plan_file_build uses `jj workspace add` to create separate Jujutsu workspaces for independent tasks, manages each builder subprocess from the main pane, requires one atomic Jujutsu (jj) commit per task, and integrates completed commits serially.",
+      "plan_file_build selects jj only at a checkout with .jj metadata, never falling back when jj is broken; otherwise it uses Git worktrees. Each task creates exactly one non-empty commit. Git source changes must be committed locally on an attached feature branch, not pushed; source must be clean including untracked files except the active plan and findings report. Git integration is isolated and finalization is fast-forward only; failed/interrupted builds retain recovery records and worktrees.",
       "Set plan_file_build runVerifier to true only when the user explicitly asks for verifier-agent review; verification is skipped by default.",
       "To trigger verifier review after a completed build, call plan_file_build again for the same plan with runVerifier true; completed tasks are skipped.",
     ],
     parameters: PlanBuildParams,
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const dashboard = startBuildDashboard(ctx, params.path);
       try {
@@ -2700,7 +2768,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("plan-build", {
-    description: "Run builder agents with the current model and effort in parallel Jujutsu workspaces and integrate commits. Add --verify to run verifier afterward. Usage: /plan-build [--verify] [plan-file] [T01,T02]",
+    description: "Run builder agents with the current model and effort in auto-selected jj workspaces or Git worktrees and integrate commits. Add --verify to run verifier afterward. Usage: /plan-build [--verify] [plan-file] [T01,T02]",
     handler: async (args, ctx) => {
       const tokens = args.trim().split(/\s+/).filter(Boolean);
       const runVerifier = tokens.includes("--verify");
@@ -2792,7 +2860,7 @@ export default function (pi: ExtensionAPI) {
     if (!activeTools.has("plan_file_create") && !activeTools.has("plan_file_build")) return;
 
     return {
-      systemPrompt: `${event.systemPrompt}\n\nPlanner-builder workflow:\n- Use plan_file_create when the user wants a planner agent to create a plan file for builder agents.\n- plan_file_create can pause to surface material planner questions through the parent pi UI and resume with the user's answers.\n- Use plan_file_build when the user wants builder agents to implement tasks from that plan file.\n- plan_file_build uses jj workspace add to create a separate Jujutsu workspace for each independent task.\n- plan_file_build runs builders in parallel as locally managed structured subprocesses in the main planner-builder pane and cancels/restarts stuck attempts.\n- plan_file_build requires one atomic Jujutsu (jj) commit for each completed task and integrates completed commits serially onto the main workspace.\n- Verifier-agent review is optional and skipped by default; set plan_file_build runVerifier to true only when the user explicitly asks for it. Calling it again for a completed plan skips done tasks and runs the requested review.\n- Plan files live in ${DEFAULT_PLAN_DIR} by default and contain machine-readable "### Task TNN:" blocks.`,
+      systemPrompt: `${event.systemPrompt}\n\nPlanner-builder workflow:\n- Use plan_file_create when the user wants a planner agent to create a plan file for builder agents.\n- plan_file_create can pause to surface material planner questions through the parent pi UI and resume with the user's answers.\n- Use plan_file_build when the user wants builder agents to implement tasks from that plan file.\n- plan_file_build selects jj only when the nearest checkout has .jj metadata (colocated repos prefer jj); otherwise it uses Git worktrees. Broken jj never falls back to Git. Nested Git checkouts are boundaries.\n- plan_file_build runs builders in parallel as locally managed structured subprocesses in the main planner-builder pane and cancels/restarts stuck attempts.\n- plan_file_build requires exactly one non-empty commit per completed task and integrates commits serially. Git requires locally committed clean source on an attached feature branch (including untracked source, except the active plan and findings report); no push is needed. Git uses an isolated integration branch then safe fast-forward, never stash/reset/snapshot commits or remotes. Retained recovery records must be reconciled before retrying an interrupted build.\n- Verifier-agent review is optional and skipped by default; set plan_file_build runVerifier to true only when the user explicitly asks for it. Calling it again for a completed plan skips done tasks and runs the requested review.\n- Plan files live in ${DEFAULT_PLAN_DIR} by default and contain machine-readable "### Task TNN:" blocks.`,
     };
   });
 }
