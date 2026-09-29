@@ -1,6 +1,5 @@
-if status is-interactive
-    # Commands to run in interactive sessions can go here
-end
+# Large Rust/Zig links need more than the default 1024 open files.
+ulimit -Sn (ulimit -Hn)
 fish_add_path /usr/local/go/bin
 mise activate fish | source
 
@@ -26,6 +25,13 @@ set -gx GO_PATH $HOME/go/bin
 set -gx DOCKER_GATEWAY_HOST 172.17.0.1
 set -gx RIPGREP_CONFIG_PATH $HOME/.ripgreprc
 set -gx EDITOR nvim
+
+# Outside Nix, expose Fedora's curl headers to Zig without shadowing its libc.
+# Preserve target flags supplied by the Nix shell or another build environment.
+if test -f /usr/include/curl/curl.h
+    set -q CFLAGS_x86_64_unknown_linux_gnu; or set -gx CFLAGS_x86_64_unknown_linux_gnu "-idirafter /usr/include"
+    set -q CXXFLAGS_x86_64_unknown_linux_gnu; or set -gx CXXFLAGS_x86_64_unknown_linux_gnu "-idirafter /usr/include"
+end
 
 if test -e "$HOME/.config/1Password/ssh/agent.toml"
     set -gx SSH_AUTH_SOCK "$HOME/.1password/agent.sock"
