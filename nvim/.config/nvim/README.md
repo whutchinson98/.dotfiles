@@ -23,8 +23,12 @@ Load order in `init.lua` mirrors the Home Manager `mkOrder` values: editor
 
 `lua/lsp.lua` also expects these on PATH (same as under Nix, where they came
 from project devshells): `gopls`, `just-lsp`, `pyright-langserver`,
-`rust-analyzer`, `typescript-language-server`. A missing one just means that
-server never attaches.
+`rust-analyzer`. A missing one just means that server never attaches.
+
+TypeScript uses nvim-lspconfig's `tsc` server, which requires TypeScript 7+
+with native `--lsp` support. It discovers `tsc` (or the preview `tsgo` binary)
+in the project's `node_modules/.bin` or on PATH; `typescript-language-server`
+is no longer used.
 
 ## Note on treesitter
 
