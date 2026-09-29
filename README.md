@@ -163,6 +163,11 @@ copy of `~/.pi` or `~/.claude` into this repo cannot leak secrets.
 
 ## Notes
 
+- `doom/` tracks `~/.config/doom/{config,init,packages}.el`. Link it with
+  `just sync-one doom` (also included in `just sync`). The Doom installation
+  and generated state in `~/.config/emacs/` stay outside this repo; install
+  Emacs and Doom separately on new machines, then run
+  `~/.config/emacs/bin/doom sync` after linking the configs.
 - `pi/` vendors the full agent config — extensions, skills, agents, prompts and
   themes — so pi bootstraps from this repo standalone. It previously lived in
   `nixos-config/configs/pi` and was symlinked in by `modules/dev/ai.nix`.
