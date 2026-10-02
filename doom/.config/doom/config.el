@@ -49,6 +49,10 @@
 ;; change `org-directory'. It must be set before org loads!
 (setq org-directory "~/org/")
 
+;; Split vertically into side-by-side windows with SPC s l.
+(map! :leader
+      :desc "Split window vertically" "s l" #'split-window-right)
+
 ;; Doom's Rust module starts LSP for rustic-mode; also support rust-ts-mode
 ;; directly (the built-in Rust mode in Emacs 30).
 (add-hook 'rust-ts-mode-local-vars-hook #'lsp! 'append)
