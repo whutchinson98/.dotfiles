@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "doppler": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@dopplerhq/mcp-server"
+      ]
+    },
+    "linear": {
+      "url": "https://mcp.linear.app/mcp"
+    },
+    "pulumi": {
+      "url": "https://mcp.ai.pulumi.com/mcp"
+    }
+  }
+}
