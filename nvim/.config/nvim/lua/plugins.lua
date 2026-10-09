@@ -238,6 +238,27 @@ require("lazy").setup({
     },
 
     {
+      "whutchinson98/jj-workspaces.nvim",
+      dependencies = { "nvim-telescope/telescope.nvim" },
+      config = function()
+        require("jj-workspaces").setup({})
+        require("telescope").load_extension("jj_workspaces")
+      end,
+      keys = {
+        {
+          "<leader>wc",
+          function() require("telescope").extensions.jj_workspaces.create_workspace() end,
+          desc = "Create jj workspace",
+        },
+        {
+          "<leader>wv",
+          function() require("telescope").extensions.jj_workspaces.workspaces() end,
+          desc = "View jj workspaces",
+        },
+      },
+    },
+
+    {
       -- Load the colorscheme before other plugins.
       "ellisonleao/gruvbox.nvim",
       lazy = false,
