@@ -47,7 +47,26 @@
 
 ;; If you use `org' and don't want your org files in the default location below,
 ;; change `org-directory'. It must be set before org loads!
-(setq org-directory "~/org/")
+(setq org-directory "~/org/"
+      org-roam-directory (expand-file-name "roam/" org-directory)
+      +org-roam-auto-backlinks-buffer t)
+
+;; Doom's +roam module handles database autosync and SPC n r bindings.
+;; Notes use stable Org IDs, so links survive file renames.
+(after! org-roam
+  (make-directory org-roam-directory t)
+  (setq org-roam-capture-templates
+        '(("d" "note" plain "%?"
+           :target (file+head "%<%Y%m%d%H%M%S>-${slug}.org"
+                              "#+title: ${title}\n#+filetags: \n\n")
+           :unnarrowed t))))
+
+(after! org-roam-dailies
+  (setq org-roam-dailies-directory "daily/"
+        org-roam-dailies-capture-templates
+        '(("d" "daily note" entry "* %<%H:%M> %?"
+           :target (file+head "%<%Y-%m-%d>.org"
+                              "#+title: %<%Y-%m-%d>\n\n")))))
 
 ;; Split vertically into side-by-side windows with SPC s l.
 (map! :leader
