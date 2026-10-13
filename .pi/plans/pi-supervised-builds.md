@@ -341,7 +341,7 @@ PLAN_TASK_RESULT: done
 ```
 
 ### Task T05: Implement the bounded per-build supervisor
-Status: in-progress
+Status: done
 Depends on: T04
 Files:
 - pi/.pi/agent/extensions/planner-builder/supervisor.ts
@@ -414,6 +414,27 @@ Commit blocked: the workspace became stale before `jj commit` ran. No commit was
 PLAN_TASK_RESULT: blocked
 ```
 
+#### Builder result 2026-10-13T15:37:40.566Z
+- Agent: builder-supervision-recovery
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05
+- Commit: 5a4aee4ea0fae314f44967fe9f7c26911ecbb0da
+- Integration: Integrated 5a4aee4ea0fae314f44967fe9f7c26911ecbb0da on top of 0ff733acf681243eb276df6d1e49a03fe6c29235.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed `ac006ce7`: T05 bounded per-build supervisor.
+
+- Recovered only the three assigned files; no compatibility fixes needed.
+- Passed 43 supervisor tests, 238 total tests, and syntax checks.
+- Working-copy commit is empty. Recovery checkout untouched.
+
+PLAN_TASK_RESULT: done
+```
+
 ### Task T06: Move builder attempts onto RPC without changing VCS authority
 Status: done
 Depends on: T04
@@ -463,7 +484,7 @@ PLAN_TASK_RESULT: done
 ```
 
 ### Task T07: Wire supervision options, ownership, and manual controls
-Status: pending
+Status: in-progress
 Depends on: T05, T06
 Files:
 - pi/.pi/agent/extensions/planner-builder/index.ts
