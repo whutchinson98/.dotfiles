@@ -341,7 +341,7 @@ PLAN_TASK_RESULT: done
 ```
 
 ### Task T05: Implement the bounded per-build supervisor
-Status: pending
+Status: in-progress
 Depends on: T04
 Files:
 - pi/.pi/agent/extensions/planner-builder/supervisor.ts
@@ -362,8 +362,60 @@ Verification:
 - `node --test pi/tests/planner-builder-supervisor.test.ts`
 - Use fake transports/clocks to verify debounce, unchanged-state silence, one-review concurrency, per-task cooldown, budgets, checkpoint expiry, question timeout, strict tool isolation, and one-time degradation.
 
+#### Builder result 2026-10-13T14:40:05.520Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05
+- Integration: Workspace kept for inspection at /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05.
+- Status: blocked
+- Exit code: 0
+- Result marker: blocked
+
+```text
+Blocked: `jj status --no-pager` reports a stale working copy. The runner must refresh this workspace; workspace management is prohibited for this task.
+
+No files changed, tests run, or commit created.
+
+PLAN_TASK_RESULT: blocked
+```
+
+#### Builder result 2026-10-13T15:02:10.112Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05
+- Integration: Workspace kept for inspection at /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05.
+- Status: failed
+- Exit code: 1
+
+```text
+Error: Failed to load extension "/home/hutch/.pi/agent/extensions/planner-builder/index.ts": Failed to load extension: Cannot find module './build-controller.ts'
+Require stack:
+- /home/hutch/.pi/agent/extensions/planner-builder/index.ts
+Hint: Start without extensions using "pi -ne".
+```
+
+#### Builder result 2026-10-13T15:33:06.743Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05
+- Integration: Workspace kept for inspection at /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t05.
+- Status: blocked
+- Exit code: 0
+- Result marker: blocked
+
+```text
+Implemented all three assigned files. Verification passed: 43 supervisor tests, 238 total tests, and syntax checks.
+
+Commit blocked: the workspace became stale before `jj commit` ran. No commit was created. The runner must refresh the workspace; workspace management is prohibited here.
+
+PLAN_TASK_RESULT: blocked
+```
+
 ### Task T06: Move builder attempts onto RPC without changing VCS authority
-Status: pending
+Status: done
 Depends on: T04
 Files:
 - pi/.pi/agent/extensions/planner-builder/builder-runner.ts
@@ -387,6 +439,28 @@ Instructions:
 Verification:
 - `node --test pi/tests/planner-builder-builder-runner.test.ts pi/tests/planner-builder-scheduler.test.ts pi/tests/planner-builder-jj.test.ts pi/tests/planner-builder-git.test.ts`
 - Verify off-mode compatibility, session persistence only when requested, restart after an existing commit, retained dirty work, waiting-human watchdog behavior, and terminal length/error classification.
+
+#### Builder result 2026-10-13T15:01:47.173Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t06
+- Commit: f5b3a16b385e3271cac8aee1d15a1d391b362103
+- Integration: Integrated f5b3a16b385e3271cac8aee1d15a1d391b362103 on top of dd5e3f429320ecc0b379a33d0bb1905633620a31.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed `f5b3a16b`; working copy clean.
+
+- Added `builder-runner.ts` for RPC lifecycle, sessions, safe restarts, questions, and completion barriers.
+- Preserved VCS authority and one-shot planner/verifier execution.
+- All 195 tests pass.
+- RPC editor dialogs use cancellable input because the installed editor lacks abort support.
+
+PLAN_TASK_RESULT: done
+```
 
 ### Task T07: Wire supervision options, ownership, and manual controls
 Status: pending

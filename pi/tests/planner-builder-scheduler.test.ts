@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
+import type { RunBuilderOptions } from "../.pi/agent/extensions/planner-builder/builder-runner.ts";
+import type { RpcAgentOptions } from "../.pi/agent/extensions/planner-builder/rpc-agent.ts";
 import { fixture, git } from "./planner-builder-fixtures.ts";
-import { loadPlannerBuilder } from "./planner-builder-harness.ts";
+import { loadPlannerBuilder, ScriptedBuilderTransport } from "./planner-builder-harness.ts";
 
 const plan = `# Build fixture
 ## Builder Tasks
@@ -48,35 +50,45 @@ test("shared scheduler runs independent Git builders concurrently, then updated 
   const bothStarted = new Promise<void>((resolve) => { release = resolve; });
   let verifierPrompt = "";
   api.setRunAgent(async (cwd: string, _agents: unknown[], agent: string, prompt: string) => {
-    if (agent === "verifier") {
-      verifierPrompt = prompt;
-      assert.notEqual(await git(cwd, "rev-parse", "HEAD"), initialHead);
-      return success(agent, cwd);
-    }
-    const taskId = prompt.match(/Assigned task: (T\d+)/)?.[1];
-    assert.match(prompt, /dedicated Git worktree/);
-    assert.doesNotMatch(prompt, /Use Jujutsu/);
-    started++;
-    if (taskId !== "T03") {
-      assert.equal(await git(cwd, "rev-parse", "HEAD"), initialHead);
-      if (started === 2) release();
-      await bothStarted;
-    } else {
-      assert.equal(started, 3);
-      assert.equal(await fs.readFile(path.join(cwd, "one.txt"), "utf8"), "T01");
-      assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "T02");
-      assert.equal(await git(cwd, "rev-list", "--count", `${initialHead}..HEAD`), "2");
-    }
-    const file = { T01: "one.txt", T02: "two.txt", T03: "three.txt" }[taskId!];
-    await fs.writeFile(path.join(cwd, file!), taskId!);
-    await git(cwd, "add", file!);
-    await git(cwd, "commit", "-m", taskId!);
+    assert.equal(agent, "verifier", "builders must not use the one-shot agent stub");
+    verifierPrompt = prompt;
+    assert.notEqual(await git(cwd, "rev-parse", "HEAD"), initialHead);
     return success(agent, cwd);
+  });
+  const transports: ScriptedBuilderTransport[] = [];
+  api.setBuilderTransport((options: RpcAgentOptions) => {
+    const transport = new ScriptedBuilderTransport(options, async (child, prompt) => {
+      const cwd = options.cwd;
+      const taskId = prompt.match(/Assigned task: (T\d+)/)?.[1];
+      assert.match(prompt, /dedicated Git worktree/);
+      assert.doesNotMatch(prompt, /Use Jujutsu/);
+      started++;
+      if (taskId !== "T03") {
+        assert.equal(await git(cwd, "rev-parse", "HEAD"), initialHead);
+        if (started === 2) release();
+        await bothStarted;
+      } else {
+        assert.equal(started, 3);
+        assert.equal(await fs.readFile(path.join(cwd, "one.txt"), "utf8"), "T01");
+        assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "T02");
+        assert.equal(await git(cwd, "rev-list", "--count", `${initialHead}..HEAD`), "2");
+      }
+      const file = { T01: "one.txt", T02: "two.txt", T03: "three.txt" }[taskId!];
+      await fs.writeFile(path.join(cwd, file!), taskId!);
+      await git(cwd, "add", file!);
+      await git(cwd, "commit", "-m", taskId!);
+      child.message();
+      child.settle();
+    });
+    transports.push(transport);
+    return transport;
   });
   const ctx = { cwd: f.root, hasUI: false };
   const params = { path: f.plan, model: "test", effort: "off", builderMonitor: false, runVerifier: true };
   const result = await api.buildPlanFile(ctx, params);
   assert.match(result.text, /3 done, 0 failed, 0 blocked/);
+  assert.equal(transports.length, 3);
+  assert.ok(transports.every((transport) => transport.stopped));
   const updatedPlan = await fs.readFile(f.plan, "utf8");
   assert.equal((updatedPlan.match(/^Status: done$/gm) ?? []).length, 3);
   assert.match(updatedPlan, /Recovery record:/);
@@ -94,14 +106,17 @@ for (const failure of ["source-edits", "cancel"]) {
     const api = loadPlannerBuilder(path.join(f.parent, "tasks"));
     const initialHead = await git(f.root, "rev-parse", "HEAD");
     const controller = new AbortController();
-    api.setRunAgent(async (cwd: string, _agents: unknown[], agent: string) => {
-      assert.equal(agent, "builder");
+    api.setRunAgent(() => { throw new Error("Verifier must not run after finalization failure"); });
+    // This test targets VCS finalization after a completed lifecycle, not RPC cancellation.
+    api.setBuilderLifecycle(async ({ workspace, agent }: RunBuilderOptions) => {
+      const cwd = workspace.cwd;
+      assert.equal(agent.name, "builder");
       await fs.writeFile(path.join(cwd, "one.txt"), "task");
       await git(cwd, "add", "one.txt");
       await git(cwd, "commit", "-m", "task");
       if (failure === "cancel") controller.abort();
       else await fs.writeFile(path.join(f.root, "user.txt"), "unsaved work");
-      return success(agent, cwd);
+      return success(agent.name, cwd);
     });
     await assert.rejects(api.buildPlanFile({ cwd: f.root, hasUI: false }, {
       path: f.plan, model: "test", effort: "off", builderMonitor: false, runVerifier: true,
@@ -127,12 +142,23 @@ test("scheduler parsing, overlap selection, result markers and prompts remain co
   const overlapping = { ...tasks[1], block: tasks[1].block.replace("two.txt", "one.txt") };
   assert.equal(api.selectParallelTaskBatch([tasks[0], overlapping], 4).length, 1);
   assert.equal(api.classifyBuilderResult({ exitCode: 0, finalOutput: "no marker" }).status, "done");
+  for (const stopReason of ["length", "error", "aborted"]) {
+    for (const finalOutput of ["no marker", "PLAN_TASK_RESULT: done"]) {
+      assert.equal(api.classifyBuilderResult({ exitCode: 0, stopReason, finalOutput }).status, "failed");
+    }
+  }
   assert.equal(api.classifyBuilderResult({ exitCode: 0, finalOutput: "```\nPLAN_TASK_RESULT: failed\n```\nPLAN_TASK_RESULT: done" }).status, "done");
   assert.equal(api.classifyBuilderResult({ exitCode: 0, finalOutput: "PLAN_TASK_RESULT: blocked" }).status, "blocked");
   const jjPrompt = api.createBuilderTask("plan.md", tasks[0], plan);
   assert.match(jjPrompt, /jj commit/);
   assert.match(jjPrompt, /Use Jujutsu/);
   assert.match(jjPrompt, /Never edit or commit the plan/);
+  for (const kind of ["jj", "git"]) {
+    const prompt = api.createBuilderTask("plan.md", tasks[0], plan, kind, "base-id");
+    assert.match(prompt, /inspect and reuse or amend only that task commit/);
+    assert.match(prompt, /never create a second task commit or amend the supplied base/);
+    assert.match(prompt, /Ambiguous ownership, multiple task commits/);
+  }
   assert.match(api.createVerifierTask("plan.md", [], "jj", "main"), /Explicit review base: main/);
   assert.match(api.createPlannerTask("task", "builder"), /locally committed/);
 });

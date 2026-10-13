@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,6 +32,8 @@ import {
   writeUserQuestionResponse,
 } from "../subagent/user-question";
 import { notify as sendSystemNotification } from "../system-notify";
+import { BuildController } from "./build-controller.ts";
+import { runBuilder, type BuilderDependencies, type RunBuilderOptions } from "./builder-runner.ts";
 import {
   hidePlanBuildDashboard,
   isPlanBuildDetails,
@@ -40,6 +43,7 @@ import {
   renderPlanBuildDetails,
   showPlanBuildDashboard,
 } from "./dashboard";
+import { createQuestionQueue } from "./question-queue.ts";
 import { parsePlanTaskResultMarker } from "./result-marker";
 import { detectVcs, GitBackend, type TaskWorkspace, type VcsKind } from "./vcs.ts";
 
@@ -119,11 +123,9 @@ interface AgentRunOptions {
   userQuestionHandler?: UserQuestionHandler;
 }
 
-interface BuilderRunOptions {
-  model?: string;
-  effort?: SelectedEffort;
-  monitor?: BuilderMonitorConfig;
-}
+type BuilderRunOptions = Pick<RunBuilderOptions,
+  "model" | "effort" | "monitor" | "controller" | "questions" | "taskId" | "vcs" | "sourceRoot" | "protectedPaths" |
+  "runDirectory" | "checkpoint">;
 
 interface AgentProcessEvent {
   type?: string;
@@ -1141,6 +1143,18 @@ async function runAgent(
   }
 }
 
+// Separate injection seams: scheduler tests may replace the lifecycle, while transport
+// tests exercise the real lifecycle without launching Pi. One-shot runAgent is unrelated.
+let runBuilderLifecycle = runBuilder;
+const builderDependencies: BuilderDependencies = {
+  getInvocation: getPiInvocation,
+  writeSystemPrompt: writePromptToTempFile,
+  writeMaxEffortExtension: writeMaxEffortExtensionToTempFile,
+  createQuestionBridge: createUserQuestionBridge,
+  parseQuestion: parseUserQuestion,
+  writeQuestionResponse: writeUserQuestionResponse,
+};
+
 async function runBuilderInWorkspace(
   workspace: TaskWorkspace,
   agents: AgentConfig[],
@@ -1150,80 +1164,10 @@ async function runBuilderInWorkspace(
   signal: AbortSignal | undefined,
   onOutput?: (result: AgentRunResult) => void,
 ): Promise<AgentRunResult> {
-  const monitor = options.monitor ?? defaultBuilderMonitorConfig();
-  const maxAttempts = monitor.enabled ? monitor.maxRestarts + 1 : 1;
-  const attempts: AgentRunAttemptSummary[] = [];
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const controller = new AbortController();
-    let timedOut = false;
-    let lastActivityAt = Date.now();
-    let lastProgress = `${agentName} attempt ${attempt}/${maxAttempts} starting...`;
-    let watchdog: ReturnType<typeof setInterval> | undefined;
-
-    const abortFromParent = () => controller.abort();
-    if (signal?.aborted) controller.abort();
-    else signal?.addEventListener("abort", abortFromParent, { once: true });
-
-    if (monitor.enabled) {
-      watchdog = setInterval(() => {
-        if (controller.signal.aborted) return;
-        const idleMs = Date.now() - lastActivityAt;
-        if (idleMs >= monitor.stuckTimeoutSeconds * 1_000) {
-          timedOut = true;
-          controller.abort();
-        }
-      }, monitor.intervalSeconds * 1_000);
-      watchdog.unref?.();
-    }
-
-    try {
-      const run = await runAgent(
-        workspace.cwd,
-        agents,
-        agentName,
-        task,
-        options,
-        controller.signal,
-        (result) => {
-          lastActivityAt = Date.now();
-          lastProgress = result.progressMessage ?? lastProgress;
-          onOutput?.({
-            ...result,
-            restartCount: attempt - 1,
-            attempts: [...attempts],
-            progressMessage: attempt > 1 ? `${lastProgress} (attempt ${attempt}/${maxAttempts})` : lastProgress,
-          });
-        },
-      );
-
-      const summary: AgentRunAttemptSummary = {
-        attempt,
-        exitCode: timedOut ? 124 : run.exitCode,
-        stopReason: timedOut ? "stuck" : run.stopReason ?? (run.exitCode === 0 ? "completed" : "failed"),
-        errorMessage: timedOut ? `No subprocess output or lifecycle progress for ${monitor.stuckTimeoutSeconds} seconds.` : run.errorMessage,
-        lastProgress,
-      };
-      attempts.push(summary);
-
-      if (timedOut && attempt < maxAttempts && !signal?.aborted) continue;
-
-      return {
-        ...run,
-        exitCode: timedOut ? 124 : run.exitCode,
-        stopReason: summary.stopReason,
-        errorMessage: summary.errorMessage ?? run.errorMessage,
-        progressMessage: summary.errorMessage ?? run.progressMessage,
-        restartCount: attempt - 1,
-        attempts,
-      };
-    } finally {
-      if (watchdog) clearInterval(watchdog);
-      signal?.removeEventListener("abort", abortFromParent);
-    }
-  }
-
-  throw new Error("Builder restart loop exited without a result.");
+  return runBuilderLifecycle({
+    ...options, workspace, agent: findAgentOrThrow(agents, agentName), task, signal, onOutput,
+    dependencies: builderDependencies,
+  });
 }
 
 function findAgentOrThrow(agents: AgentConfig[], agentName: string): AgentConfig {
@@ -1464,6 +1408,8 @@ function createBuilderTask(planPath: string, task: PlanTask, fullPlan: string, k
     "Rules:",
     "- Implement only the assigned task unless a direct dependency is required to make it work.",
     ...vcsRules,
+    `- The supplied base is ${baseRevision ?? "the runner-provided base"}. Before committing (especially after a restart), inspect status AND history from that base. If the task commit already exists, inspect and reuse or amend only that task commit as necessary; never create a second task commit or amend the supplied base.`,
+    "- Retain and inspect dirty task work from previous attempts. Ambiguous ownership, multiple task commits, merges, or a changed base must block safely; do not repair history or force integration.",
     "- Never edit or commit the plan file or runner-owned status/report output in ANY checkout, including the source workspace. The runner alone updates plan state.",
     "- Avoid unrelated refactors and unrelated files.",
     "- Only report `PLAN_TASK_RESULT: done` after the task commit succeeds. If you cannot safely create exactly one atomic commit, report `PLAN_TASK_RESULT: blocked` or `PLAN_TASK_RESULT: failed` and explain why.",
@@ -1509,7 +1455,7 @@ function createVerifierTask(planPath: string, results: PlanBuildResult[], kind: 
 }
 
 function classifyBuilderResult(result: AgentRunResult): { status: TaskStatus; marker?: string } {
-  if (isAgentErrored(result)) return { status: "failed" };
+  if (isAgentErrored(result) || result.stopReason === "length") return { status: "failed" };
 
   const marker = parsePlanTaskResultMarker(result.finalOutput);
   if (marker === "blocked") return { status: "blocked", marker };
@@ -2025,6 +1971,21 @@ async function buildPlanFile(
   const initialHead = gitBackend?.initialHead ?? await getCommitId(ctx.cwd, "@");
   let integratedHead = initialHead;
   const cleanupWarnings: string[] = [];
+  const questions = createQuestionQueue({
+    interactive: () => ctx.hasUI,
+    show: async (question, questionSignal) => {
+      const dialogOptions = { signal: questionSignal };
+      switch (question.method) {
+        case "select": return ctx.ui.select(question.title, question.options ?? [], dialogOptions);
+        case "confirm": return ctx.ui.confirm(question.title, question.message ?? "", dialogOptions);
+        case "input": return ctx.ui.input([question.title, question.message].filter(Boolean).join("\n"), question.placeholder, dialogOptions);
+        // Pi's editor has no abort option. A cancellable text dialog preserves the
+        // RPC string response without leaving an orphan editor on build shutdown.
+        case "editor": return ctx.ui.input(question.title, question.prefill, dialogOptions);
+      }
+    },
+  });
+  const buildController = new BuildController({ runId: randomUUID(), questions });
 
   try {
     while (true) {
@@ -2117,7 +2078,8 @@ async function buildPlanFile(
             agents,
             builderAgent,
             launch.prompt,
-            { model, effort, monitor },
+            { model, effort, monitor, controller: buildController, questions, taskId: launch.task.id,
+              vcs: vcs.kind, sourceRoot: sourceWorkspaceRoot, protectedPaths },
             batchController.signal,
             (agentResult) => {
               const status = agentResult.progressMessage
@@ -2246,6 +2208,8 @@ async function buildPlanFile(
   } catch (error) {
     if (gitBackend) throw new Error(`${commandErrorMessage(error)}\n${gitBackend.recoveryInstructions()}`);
     throw error;
+  } finally {
+    await buildController.cancelBuild();
   }
 
   if (runVerifier && !signal?.aborted) {

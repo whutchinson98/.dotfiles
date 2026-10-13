@@ -6,7 +6,8 @@ import * as path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { detectVcs } from "../.pi/agent/extensions/planner-builder/vcs.ts";
-import { loadPlannerBuilder } from "./planner-builder-harness.ts";
+import type { RpcAgentOptions } from "../.pi/agent/extensions/planner-builder/rpc-agent.ts";
+import { loadPlannerBuilder, ScriptedBuilderTransport } from "./planner-builder-harness.ts";
 
 const exec = promisify(execFile);
 async function jj(cwd: string, ...args: string[]): Promise<string> {
@@ -77,16 +78,23 @@ test("jj shared scheduler preserves the runner's updated plan across workspace m
   const { root, api } = await fixture(t);
   const planPath = path.join(root, "plan.md");
   await fs.writeFile(planPath, "### Task T01: Add file\nStatus: pending\nDepends on: none\nFiles:\n- task.txt\n");
-  api.setRunAgent(async (cwd: string, _agents: unknown[], agent: string, prompt: string) => {
-    assert.match(prompt, /Use Jujutsu/);
-    await fs.writeFile(path.join(cwd, "task.txt"), "task\n");
-    await jj(cwd, "commit", "-m", "T01");
-    return { agent, cwd, exitCode: 0, stderr: "", finalOutput: "PLAN_TASK_RESULT: done", usage: {} };
+  api.setRunAgent(() => { throw new Error("One-shot agents were not requested"); });
+  let child: ScriptedBuilderTransport | undefined;
+  api.setBuilderTransport((options: RpcAgentOptions) => {
+    child = new ScriptedBuilderTransport(options, async (transport, prompt) => {
+      assert.match(prompt, /Use Jujutsu/);
+      await fs.writeFile(path.join(options.cwd, "task.txt"), "task\n");
+      await jj(options.cwd, "commit", "-m", "T01");
+      transport.message();
+      transport.settle();
+    });
+    return child;
   });
   const result = await api.buildPlanFile({ cwd: root, hasUI: false }, {
     path: planPath, model: "fixture", effort: "off", builderMonitor: false,
   });
   assert.match(result.text, /1 done, 0 failed, 0 blocked/);
+  assert.equal(child?.stopped, true);
   assert.equal(await fs.readFile(path.join(root, "task.txt"), "utf8"), "task\n");
   assert.match(await fs.readFile(planPath, "utf8"), /Status: done/);
 });
