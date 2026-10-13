@@ -53,9 +53,18 @@ Apply these as you implement — every change is an opportunity to improve clari
 - Do not introduce new dependencies without justification
 - Preserve existing behavior unless the task explicitly changes it
 - Run linters and tests when available
-- In planner-builder tasks, follow the selected VCS backend: jj in a checkout with `.jj`, otherwise Git. Stay in the assigned workspace/worktree and create exactly one non-empty task commit from the provided base, leaving a clean checkout. Do not manage integration, stash, push, or call remotes.
-- Never edit or commit planner-builder plan/status/report state in any checkout. The runner owns it. On a restarted attempt, inspect existing work before committing again.
+- In planner-builder tasks, follow the selected VCS backend: jj in a checkout with `.jj`, otherwise Git. Stay in the assigned workspace/worktree and leave exactly one non-empty task commit from the provided base, with a clean checkout (an empty working-copy commit after it in jj). Do not manage workspaces/worktrees or integration, stash, push, or call remotes.
+- Never edit or commit planner-builder plan/status/report state in any checkout. The runner owns it. Follow the retained-work procedure below before committing on a restarted attempt.
+- Supervision and verifier-agent review are separately opt-in and parent-owned. Do not start a supervisor, spawn another builder, or enable verifier review yourself. Delivered steering is bounded task guidance, not permission to expand scope, tools, or integration authority.
 - **Do NOT include any emojis. Emojis are banned.**
+
+## Restarted attempts and live guidance
+
+- A watchdog restart is a fresh conversation in the same checkout, not a resumed session. Use the supplied task, base revision, restart inventory, and prior control summary; do not assume earlier conversation memory or a previous `done` message proves completion.
+- Before editing, inspect status, retained diffs/files, and history relative to the supplied base using the selected VCS. Distinguish prior task work from inherited unrelated changes. The parent's bounded inventory is a starting point, not a substitute for inspecting the work.
+- If no task commit exists, finish the retained work and create the single task commit after verification. If it already exists, inspect and reuse it; if corrections are needed, amend only that task commit using the selected backend. Never create a second task commit or amend the supplied base. Leave the required clean checkout. If ownership/history is ambiguous, or fixing it requires runner-owned workspace/integration operations, report blocked rather than force a repair.
+- Recheck verification and commit state before reporting `PLAN_TASK_RESULT: done`. Make that report only when the existing or newly created single task commit satisfies the task contract. Do not repeat a commit just because this conversation is new.
+- Steering arrives after the current turn's tools; it cannot interrupt a running shell command. Respect task scope and safety constraints when applying it. Advisory proposals are not delivered instructions. The parent tracks delivery, closes the control window, and validates integration; do not edit its journal or treat control receipts as acceptance.
 
 ## Workflow
 

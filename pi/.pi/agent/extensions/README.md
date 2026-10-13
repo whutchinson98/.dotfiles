@@ -2,7 +2,7 @@
 
 Store pi extension source files here.
 
-Pi will load these from `~/.pi/agent/extensions` once linked by Home Manager.
+Pi loads these from `~/.pi/agent/extensions`. This checkout uses individual Stow links; new files need a separate deployment review. See [safe deployment checks](../README.md#safe-deployment-check), not a broad home-directory resynchronization.
 
 Examples:
 
@@ -55,11 +55,15 @@ Subagent calls open a full-screen dashboard modeled after `davis7dotsh/my-pi-set
 | `plan_file_build` | Auto-select jj workspaces when checkout `.jj` metadata exists, otherwise Git worktrees. Run independent builders in parallel and serially integrate one non-empty commit per task. Git requires locally committed clean source on an attached branch (not pushed) and safely fast-forwards from a separate integration checkout. Verifier review is skipped by default; set `runVerifier: true` to run the unchanged structured `verifier` subprocess with the same selection and write `.pi/outputs/findings.html`. |
 | `plan_file_list` | List recent plan files. |
 
-It also registers `/plan-create`, `/plan-build`, and `/plan-list`. Pass `--verify` to `/plan-build` to opt into verifier review. Plan builds create checkouts under `PI_PLAN_WORKSPACE_ROOT` or `~/.pi/plan-workspaces` using `jj workspace add` or `git worktree add` from the latest integrated head. Colocated repos prefer jj; broken jj is an error, never a Git fallback. See [planner-builder/README.md](planner-builder/README.md) for Git preconditions, narrow plan/report exemptions, explicit verifier bases and durable recovery instructions.
+It registers `/plan-create`, `/plan-build`, and `/plan-list`. **Supervision and verifier review are independently off by default.** Use `/plan-build --supervise` or `plan_file_build` with `supervisionMode: "steer"` for bounded live guidance; use `--advisory` or `supervisionMode: "advisory"` for recorded proposals only, including manual requests. The tool's `supervisorAgent` defaults to `"supervisor"`; `supervisionOptions` supplies normalized bounded limits. Only `--verify` or `runVerifier: true` enables the separate post-build verifier.
 
-Builder output is streamed from each subprocess into the main planner-builder dashboard. Cancellation and stuck handling terminate the local subprocess, and stuck restarts launch a new subprocess in the same checkout. The last standalone, unfenced `PLAN_TASK_RESULT: done|failed|blocked` line classifies the completed task before commit validation.
+Manual controls are `/plan-inspect [runId] [taskId]`, `/plan-steer <runId> <taskId> <attemptId> <guidance>`, and `/plan-cancel <runId> [taskId attemptId]`. Copy current identities from inspection; stale attempts are rejected. Accepted/queued guidance is not delivered until matching message evidence is observed. Steering waits for current-turn tools and cannot interrupt a shell command. Closing/toggling the dashboard with `Alt+X` does not cancel a build; use `/plan-cancel` explicitly. Human questions are serialized with finite deadlines, and supervisor failure/budget exhaustion visibly disables supervision while healthy builders retain watchdog handling.
 
-Successfully integrated jj workspaces are forgotten and deleted. Git cleans up only after safe source finalization, without force-removing new work; interrupted builds retain an integration branch/worktree and recovery JSON. Failed, blocked, cancelled, stuck-exhausted, validation-failed, or conflicted workspaces are retained for inspection. Planner questions and optional verifier review retain their existing locally spawned structured subprocess behavior.
+Plan builds create checkouts under `PI_PLAN_WORKSPACE_ROOT` or `~/.pi/plan-workspaces` using `jj workspace add` or `git worktree add` from the latest integrated head. Colocated repos prefer jj; broken jj is an error, never a Git fallback. Builder RPC output streams into the dashboard, but structured state—not display tails—controls completion. Before validation the parent closes guidance admission, drains controls, and stops/joins the settled child. The last standalone, unfenced `PLAN_TASK_RESULT: done|failed|blocked` line classifies the completed task before commit validation.
+
+Stuck restarts use a fresh conversation in the same checkout. Builders must inspect retained edits/history and reuse or amend their existing single task commit, never add a second. Successfully integrated jj workspaces are forgotten and deleted. Git cleans up only after safe source finalization, without force-removing new work; interrupted builds retain an integration branch/worktree and recovery JSON. Failed, blocked, cancelled, stuck-exhausted, validation-failed, or conflicted workspaces are retained for inspection. Planner questions and optional verifier review retain their one-shot subprocess behavior.
+
+Run journals live under `PI_PLAN_RUN_ROOT` or `~/.pi/plan-runs`; supervised builder/supervisor sessions are retained there with attempt mappings. Treat transcripts as sensitive: they are not automatically pruned. There is no automatic crash recovery or reattachment; existing VCS recovery is authoritative. See [planner-builder/README.md](planner-builder/README.md) for examples, exact limits, receipts/checkpoints, question deadlines, manual inspection, Git preconditions, verifier bases, and recovery instructions.
 
 ## Remote MCP extensions
 
