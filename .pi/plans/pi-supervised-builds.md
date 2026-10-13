@@ -148,7 +148,7 @@ T08 and T09 can run concurrently after T07.
 ## Builder Tasks
 
 ### Task T01: Define bounded build observations and decision persistence
-Status: in-progress
+Status: done
 Depends on: none
 Files:
 - pi/.pi/agent/extensions/planner-builder/build-state.ts
@@ -186,6 +186,27 @@ Blocked: `jj status --no-pager` reports a stale working copy requiring `jj works
 No files changed, tests run, or commit created. Please have the runner refresh this workspace and retry.
 
 PLAN_TASK_RESULT: blocked
+```
+
+#### Builder result 2026-10-13T14:09:11.773Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t01
+- Commit: a8a60ba65cb0adb3cccbcf843fde268bb8f28522
+- Integration: Integrated a8a60ba65cb0adb3cccbcf843fde268bb8f28522 on top of 1d06b712b13a5d7f353ff3c1e049864be8b4350c.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed T01 as `dfd63533`; working copy is clean.
+
+- Added bounded observations, immutable snapshots, RPC usage accounting, and control transitions.
+- Added private, serialized JSONL journaling with terminal-capacity reservation and surfaced I/O failures.
+- Verification: 31 focused tests and all 139 planner-builder tests passed; syntax checks passed.
+
+PLAN_TASK_RESULT: done
 ```
 
 ### Task T02: Implement a continuously drained RPC subprocess transport
@@ -277,7 +298,7 @@ PLAN_TASK_RESULT: done
 ```
 
 ### Task T04: Enforce validated controls and an integration barrier
-Status: pending
+Status: done
 Depends on: T01, T02, T03
 Files:
 - pi/.pi/agent/extensions/planner-builder/build-controller.ts
@@ -297,6 +318,27 @@ Instructions:
 Verification:
 - `node --test pi/tests/planner-builder-controller.test.ts`
 - Cover advisory no-op, accepted-versus-delivered status, bounds/cooldown, duplicate controls, stale attempts, control-versus-settle races, task completion during inspection, integration closure, human waits, journal failure, and cancellation.
+
+#### Builder result 2026-10-13T14:39:12.383Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t04
+- Commit: b9a0fb466af08723ad23997a5accb582f3441d98
+- Integration: Integrated b9a0fb466af08723ad23997a5accb582f3441d98 on top of a8a60ba65cb0adb3cccbcf843fde268bb8f28522.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed `b9a0fb46`; working copy is clean.
+
+- Added validated guidance, evidence-based delivery tracking, cancellation, human-wait accounting, and the integration barrier.
+- Changed only the two assigned files.
+- Verification: 33 focused tests, all 172 planner-builder tests, and syntax checks passed.
+
+PLAN_TASK_RESULT: done
+```
 
 ### Task T05: Implement the bounded per-build supervisor
 Status: pending
