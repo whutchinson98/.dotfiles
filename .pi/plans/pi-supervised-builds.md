@@ -484,7 +484,7 @@ PLAN_TASK_RESULT: done
 ```
 
 ### Task T07: Wire supervision options, ownership, and manual controls
-Status: in-progress
+Status: done
 Depends on: T05, T06
 Files:
 - pi/.pi/agent/extensions/planner-builder/index.ts
@@ -510,6 +510,28 @@ Verification:
 - `node --test pi/tests/planner-builder-controls.test.ts pi/tests/planner-builder-lifecycle.test.ts`
 - `node --test pi/tests/planner-builder*.test.ts`
 - Test competing background starts, command/tool ownership, stale commands, flag parsing, default off, missing supervisor degradation, UI closure versus cancellation, parent abort, and awaited reload cleanup.
+
+#### Builder result 2026-10-13T16:05:29.714Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t07
+- Commit: 86740eab90cfffd1e9f75fc3c6208ffb276ee446
+- Integration: Integrated 86740eab90cfffd1e9f75fc3c6208ffb276ee446 on top of cc1093e78f3ffd87f6ba8224999321a0bda31d8a.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed `9687692a`; working copy is clean.
+
+- Wired supervision, shared ownership, manual controls, external journals, and awaited cleanup.
+- Added dashboard status and bounded planning-question records.
+- Updated scheduler regressions for sealed-attempt enforcement.
+- Verification: 18 focused tests and all 256 planner-builder tests pass.
+
+PLAN_TASK_RESULT: done
+```
 
 ### Task T08: Add end-to-end supervised transport and source-preservation regressions
 Status: pending

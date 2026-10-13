@@ -33,7 +33,9 @@ import {
 } from "../subagent/user-question";
 import { notify as sendSystemNotification } from "../system-notify";
 import { BuildController } from "./build-controller.ts";
+import { normalizeSupervisionConfig, SUPERVISION_LIMITS, type SessionMapping, type SupervisionMode, type SupervisionOptions } from "./build-state.ts";
 import { runBuilder, type BuilderDependencies, type RunBuilderOptions } from "./builder-runner.ts";
+import { canonicalRunRoot, parseBuildCommand, PlannerOperations, planningQuestionSection, recordedPlanningQuestions, waitForParentIdle, type OwnedOperation } from "./controls.ts";
 import {
   hidePlanBuildDashboard,
   isPlanBuildDetails,
@@ -45,6 +47,8 @@ import {
 } from "./dashboard";
 import { createQuestionQueue } from "./question-queue.ts";
 import { parsePlanTaskResultMarker } from "./result-marker";
+import { RunJournal } from "./run-journal.ts";
+import { startSupervisor, type Supervisor } from "./supervisor.ts";
 import { detectVcs, GitBackend, type TaskWorkspace, type VcsKind } from "./vcs.ts";
 
 const DEFAULT_PLANNER_AGENT = "planner";
@@ -92,6 +96,7 @@ interface BuilderMonitorConfig {
 
 interface AgentRunAttemptSummary {
   attempt: number;
+  attemptId?: string;
   exitCode: number;
   stopReason?: string;
   errorMessage?: string;
@@ -253,6 +258,11 @@ const PlanBuildParams = Type.Object({
         "Optional task ids to run, e.g. [\"T01\", \"T02\"]. If omitted, all pending/failed/blocked tasks are considered.",
     }),
   ),
+  supervisionMode: Type.Optional(StringEnum(["off", "advisory", "steer"] as const, { default: "off", description: "Off by default. Advisory records proposals; steer can deliver bounded guidance. Never enables verification." })),
+  supervisorAgent: Type.Optional(Type.String({ description: 'Supervisor agent name. Default: "supervisor"; effective tools remain restricted.' })),
+  supervisionOptions: Type.Optional(Type.Object(Object.fromEntries(
+    Object.entries(SUPERVISION_LIMITS.optionRanges).map(([name, [minimum, maximum]]) => [name, Type.Optional(Type.Number({ minimum, maximum }))]),
+  ), { additionalProperties: false })),
   builderAgent: Type.Optional(Type.String({ description: 'Builder agent name. Default: "builder".' })),
   verifierAgent: Type.Optional(Type.String({ description: 'Verifier agent name to run when runVerifier is true. Default: "verifier".' })),
   runVerifier: Type.Optional(
@@ -600,13 +610,6 @@ function createPlannerTask(request: string, builderAgent: string): string {
     "Keep task ids sequential as T01, T02, T03, etc.",
     "Use Depends on: none for independent tasks, or a comma-separated list like Depends on: T01, T02.",
   ].join("\n");
-}
-
-function parseTaskIds(raw: string): string[] {
-  return raw
-    .split(/[\s,]+/)
-    .map((id) => id.trim())
-    .filter(Boolean);
 }
 
 function normalizeTaskId(taskId: string): string {
@@ -1183,6 +1186,7 @@ async function confirmProjectAgents(
   agentScope: AgentScope,
   agentNames: string[],
   enabled: boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!enabled || !ctx.hasUI || (agentScope !== "project" && agentScope !== "both")) return;
 
@@ -1200,8 +1204,10 @@ async function confirmProjectAgents(
       "",
       "Project agents are repo-controlled prompts. Only continue for trusted repositories.",
     ].join("\n"),
+    { signal },
   );
 
+  signal?.throwIfAborted();
   if (!ok) throw new Error("Canceled: project-local agents were not approved.");
 }
 
@@ -1260,7 +1266,7 @@ async function createPlanFile(
 
   findAgentOrThrow(agents, plannerAgent);
   findAgentOrThrow(agents, builderAgent);
-  await confirmProjectAgents(ctx, discovery, agents, agentScope, [plannerAgent, builderAgent], params.confirmProjectAgents ?? true);
+  await confirmProjectAgents(ctx, discovery, agents, agentScope, [plannerAgent, builderAgent], params.confirmProjectAgents ?? true, signal);
 
   if (fs.existsSync(absolutePath) && !params.overwrite) {
     throw new Error(`Plan file already exists: ${relativePath}. Pass overwrite: true or choose another path.`);
@@ -1354,7 +1360,8 @@ async function createPlanFile(
   const planBody = plannerResult.finalOutput.trim();
   if (!planBody) throw new Error("Planner agent completed without producing a plan.");
 
-  const content = `${planFileHeader(request, plannerAgent, builderAgent)}${planBody}\n`;
+  signal?.throwIfAborted();
+  const content = `${planFileHeader(request, plannerAgent, builderAgent)}${planBody}\n${planningQuestionSection(details.questions)}`;
   const tasks = parsePlanTasks(content);
   details.taskCount = tasks.length;
   updatePlannerView({
@@ -1902,12 +1909,16 @@ async function buildPlanFile(
     builderMonitorIntervalSeconds?: number;
     builderStuckTimeoutSeconds?: number;
     builderMaxRestarts?: number;
+    supervisionMode?: SupervisionMode;
+    supervisorAgent?: string;
+    supervisionOptions?: Partial<SupervisionOptions>;
     confirmProjectAgents?: boolean;
     model: string;
     effort: SelectedEffort;
   },
   signal?: AbortSignal,
   onUpdate?: OnUpdateCallback<PlanBuildDetails>,
+  operation?: OwnedOperation,
 ): Promise<{ text: string; details: PlanBuildDetails }> {
   const absolutePath = resolvePath(ctx.cwd, params.path);
   const relativePath = displayPath(ctx.cwd, absolutePath);
@@ -1919,6 +1930,12 @@ async function buildPlanFile(
   const agentScope = params.agentScope ?? "user";
   const maxConcurrency = Math.max(1, Math.min(MAX_CONCURRENCY, Math.floor(params.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY)));
   const monitor = normalizeBuilderMonitorConfig(params);
+  const supervision = normalizeSupervisionConfig(params);
+  const runId = operation?.runId ?? randomUUID();
+  let buildController: BuildController | undefined;
+  let journal: RunJournal | undefined;
+  let supervisor: Supervisor | undefined;
+  let supervisorSession: SessionMapping | undefined;
   const discovery = discoverAgents(ctx.cwd, agentScope);
   const agents = discovery.agents;
   const targetIds = new Set((params.taskIds ?? []).map(normalizeTaskId));
@@ -1931,8 +1948,8 @@ async function buildPlanFile(
     const current = agentViews.get(id);
     if (current) agentViews.set(id, { ...current, ...update });
   };
-  const detailsFor = (currentVerifierRun = verifierRun) =>
-    buildDetails(
+  const detailsFor = (currentVerifierRun = verifierRun): PlanBuildDetails => {
+    const details = buildDetails(
       relativePath,
       builderAgent,
       maxConcurrency,
@@ -1943,6 +1960,22 @@ async function buildPlanFile(
       currentVerifierRun,
       monitor,
     );
+    const snapshot = buildController?.inspectBuild();
+    details.supervision = {
+      runId, mode: supervision.supervisionMode, agent: supervision.supervisorAgent,
+      status: supervisor?.status.state ?? (supervision.supervisionMode === "off" ? "off" : "starting"),
+      disableReason: snapshot?.supervisionDisableReason, journalPath: journal?.path, runDirectory: journal?.runDirectory,
+      supervisor: supervisor?.status, supervisorSession,
+      attempts: snapshot?.tasks.map((task) => ({
+        taskId: task.taskId, attemptId: task.attemptId, attemptNumber: task.attemptNumber,
+        phase: results.some((result) => result.task.id === task.taskId && result.status === "done") ? "done" : task.phase,
+        humanWait: task.humanWait.since !== null, session: task.session,
+        controls: buildController!.inspectTask(task).controlOutcomes,
+      })) ?? [],
+    };
+    if (details.supervision.disableReason) details.supervision.status = "disabled";
+    return details;
+  };
 
   findAgentOrThrow(agents, builderAgent);
   if (runVerifier) findAgentOrThrow(agents, verifierAgent);
@@ -1951,8 +1984,9 @@ async function buildPlanFile(
     discovery,
     agents,
     agentScope,
-    runVerifier ? [builderAgent, verifierAgent] : [builderAgent],
+    [builderAgent, ...(runVerifier ? [verifierAgent] : []), ...(supervision.supervisionMode !== "off" ? [supervision.supervisorAgent] : [])],
     params.confirmProjectAgents ?? true,
+    signal,
   );
 
   if (!fs.existsSync(absolutePath)) throw new Error(`Plan file not found: ${relativePath}`);
@@ -1965,11 +1999,9 @@ async function buildPlanFile(
   const sourceWorkspaceRoot = vcs.root;
   const repositoryRoot = vcs.kind === "jj" ? await getMainJjWorkspaceRoot(sourceWorkspaceRoot) : sourceWorkspaceRoot;
   const protectedPaths = [path.relative(sourceWorkspaceRoot, absolutePath), ".pi/outputs/findings.html"];
-  const gitBackend = vcs.kind === "git"
-    ? await GitBackend.start(ctx.cwd, sourceWorkspaceRoot, absolutePath, await taskWorkspaceDirectory(repositoryRoot))
-    : undefined;
-  const initialHead = gitBackend?.initialHead ?? await getCommitId(ctx.cwd, "@");
-  let integratedHead = initialHead;
+  let gitBackend: GitBackend | undefined;
+  let initialHead = "";
+  let integratedHead = "";
   const cleanupWarnings: string[] = [];
   const questions = createQuestionQueue({
     interactive: () => ctx.hasUI,
@@ -1985,9 +2017,64 @@ async function buildPlanFile(
       }
     },
   });
-  const buildController = new BuildController({ runId: randomUUID(), questions });
+  let unsubscribe = (): void => {};
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  const cancel = (): void => { void buildController?.cancelBuild().catch(() => {}); };
 
   try {
+    const runRoot = await canonicalRunRoot(process.env.PI_PLAN_RUN_ROOT?.trim() || undefined);
+    journal = await RunJournal.open({ runId, runDirectory: path.join(runRoot, runId),
+      sourceRoots: [sourceWorkspaceRoot, repositoryRoot, await taskWorkspaceDirectory(repositoryRoot)],
+      protectedPaths: [absolutePath, path.join(sourceWorkspaceRoot, ".pi", "outputs")] });
+    if (operation) {
+      operation.runDirectory = journal.runDirectory;
+      operation.journalPath = journal.path;
+    }
+    signal?.throwIfAborted();
+    gitBackend = vcs.kind === "git"
+      ? await GitBackend.start(ctx.cwd, sourceWorkspaceRoot, absolutePath, await taskWorkspaceDirectory(repositoryRoot))
+      : undefined;
+    initialHead = gitBackend?.initialHead ?? await getCommitId(ctx.cwd, "@");
+    integratedHead = initialHead;
+    buildController = new BuildController({ runId, supervision, journal, questions });
+    if (operation) operation.controller = buildController;
+    signal?.addEventListener("abort", cancel, { once: true });
+    signal?.throwIfAborted();
+    const publishSupervision = (): void => {
+      const details = detailsFor();
+      onUpdate?.({ content: [{ type: "text", text: `Run ${runId}: supervision ${details.supervision!.status}. /plan-inspect ${runId}; /plan-cancel ${runId}. Dashboard close/toggle does not cancel.` }], details });
+    };
+    if (supervision.supervisionMode !== "off") {
+      const agent = agents.find((candidate) => candidate.name === supervision.supervisorAgent);
+      if (!agent) buildController.disableSupervision(`Supervisor agent "${supervision.supervisorAgent}" is unavailable; deterministic builders/watchdog remain active.`);
+      else {
+        const planText = await fs.promises.readFile(absolutePath, "utf8");
+        supervisor = await startSupervisor({ controller: buildController, agent, questions, model, effort, signal,
+          journal: {
+            runId: journal.runId, runDirectory: journal.runDirectory,
+            get status() { return journal!.status; },
+            recordDecision: (decision) => journal!.recordDecision(decision),
+            recordSession: async (session) => { await journal!.recordSession(session); supervisorSession = session; },
+          },
+          context: { planText, recordedDecisions: recordedPlanningQuestions(planText),
+            constraints: "The runner alone writes plan status/reports and manages integration. Do not rewrite plans or spawn agents. Preserve source changes and assigned scope.",
+            acceptanceInstructions: "Each task must satisfy its plan instructions and produce exactly one nonempty task commit on the supplied base with a clean checkout. Only the runner validates and integrates sealed attempts.",
+            verificationInstructions: "Follow the plan's per-task verification commands. Supervision is not verification; verifier-agent review is separately opt-in." },
+          dependencies: { getInvocation: getPiInvocation },
+          onDisabled: () => publishSupervision(),
+        });
+      }
+    }
+    // A slow human or supervisor must remain visible even when builders emit nothing.
+    refreshTimer = setInterval(() => {
+      try { publishSupervision(); }
+      catch { operation?.abort.abort(); cancel(); }
+    }, 1000);
+    refreshTimer.unref?.();
+    unsubscribe = buildController.onObservation((observation) => {
+      if (["control", "human-wait", "session"].includes(observation.payload.kind)) publishSupervision();
+    });
+    publishSupervision();
     while (true) {
       signal?.throwIfAborted();
       const content = await fs.promises.readFile(absolutePath, "utf8");
@@ -2078,8 +2165,9 @@ async function buildPlanFile(
             agents,
             builderAgent,
             launch.prompt,
-            { model, effort, monitor, controller: buildController, questions, taskId: launch.task.id,
-              vcs: vcs.kind, sourceRoot: sourceWorkspaceRoot, protectedPaths },
+            { model, effort, monitor, controller: buildController!, questions, taskId: launch.task.id,
+              vcs: vcs.kind, sourceRoot: sourceWorkspaceRoot, protectedPaths, runDirectory: journal!.runDirectory,
+              checkpoint: supervisor?.checkpoint },
             batchController.signal,
             (agentResult) => {
               const status = agentResult.progressMessage
@@ -2151,9 +2239,20 @@ async function buildPlanFile(
           const completed = await Promise.race(running.map((promise, index) => promise.then((taskRun) => ({ index, taskRun }))));
           running.splice(completed.index, 1);
 
+          // The sealed controller result is a prerequisite, never a substitute for VCS validation.
+          let readinessFailure: string | undefined;
+          if (completed.taskRun.result.status === "done") {
+            const attemptId = completed.taskRun.result.run.attempts?.at(-1)?.attemptId;
+            const taskId = completed.taskRun.task.id;
+            if (!attemptId || !buildController.inspectTask({ runId, taskId, attemptId }).readyForIntegration) {
+              completed.taskRun.result.status = "failed";
+              readinessFailure = "Builder attempt is not sealed for integration; workspace retained.";
+            }
+          }
           const finalized = gitBackend
             ? await integrateGitTask(gitBackend, completed.taskRun, integratedHead)
             : await integrateTaskWorkspace(ctx.cwd, completed.taskRun.workspace, completed.taskRun.result, integratedHead, protectedPaths);
+          if (readinessFailure) finalized.result.integrationMessage = `${readinessFailure}\n${finalized.result.integrationMessage ?? ""}`;
           integratedHead = finalized.integratedHead;
           results.push(finalized.result);
           updateAgentView(completed.taskRun.task.id, {
@@ -2209,7 +2308,15 @@ async function buildPlanFile(
     if (gitBackend) throw new Error(`${commandErrorMessage(error)}\n${gitBackend.recoveryInstructions()}`);
     throw error;
   } finally {
-    await buildController.cancelBuild();
+    clearInterval(refreshTimer);
+    unsubscribe();
+    signal?.removeEventListener("abort", cancel);
+    // Close admission first, then join all owned work, and only then flush persistence.
+    try {
+      const cleanup = await Promise.allSettled([buildController?.cancelBuild(), questions.close(), supervisor?.stop()]);
+      const failure = cleanup.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    } finally { await journal?.close(); }
   }
 
   if (runVerifier && !signal?.aborted) {
@@ -2290,7 +2397,8 @@ async function buildPlanFile(
     verifierText = "Verifier finished. Report: .pi/outputs/findings.html";
   }
   const text = [
-    `Plan build finished for ${relativePath}.`,
+    `Plan build finished for ${relativePath}. Run: ${runId}.`,
+    `Supervision: ${supervision.supervisionMode}${buildController?.inspectBuild().supervisionDisableReason ? ` (disabled: ${buildController.inspectBuild().supervisionDisableReason})` : ""}. Journal: ${journal?.path}. Sessions: ${journal?.runDirectory}.`,
     `Results: ${doneCount} done, ${failedCount} failed, ${blockedCount} blocked, ${skipped.length} skipped.`,
     verifierText,
     cleanupWarnings.length ? `Cleanup warnings:\n${cleanupWarnings.join("\n")}` : "",
@@ -2482,6 +2590,9 @@ function startCommandProgress(ctx: ExtensionContext, key: string, initialText: s
 }
 
 export default function (pi: ExtensionAPI) {
+  // Planner/build tools may be installed in child environments, but must never nest orchestration.
+  if (process.env.PI_SUBAGENT === "1") return;
+  const operations = new PlannerOperations();
   let selectedEffort: SelectedEffort | undefined;
   let activeBuildDashboard: PlanBuildDashboard | undefined;
 
@@ -2534,10 +2645,28 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // Pi awaits session_shutdown for reload as well as session replacement/exit.
+    await operations.shutdown();
     if (activeBuildDashboard) hidePlanBuildDashboard(ctx, activeBuildDashboard);
     activeBuildDashboard = undefined;
   });
+
+  const controlDescriptions = {
+    inspect: "Inspect active run: /plan-inspect [runId] [taskId]",
+    steer: "Bounded manual guidance: /plan-steer <runId> <taskId> <attemptId> <guidance>",
+    cancel: "Cancel explicitly: /plan-cancel <runId> [taskId attemptId]. Dashboard close does not cancel.",
+  };
+  for (const command of ["inspect", "steer", "cancel"] as const) {
+    pi.registerCommand(`plan-${command}`, {
+      description: controlDescriptions[command],
+      handler: async (args, ctx) => {
+        // Never waitForIdle: manual controls must remain usable while a build tool owns the parent turn.
+        try { ctx.ui.notify(await operations.control(command, args), "info"); }
+        catch (error) { ctx.ui.notify(commandErrorMessage(error), "error"); }
+      },
+    });
+  }
 
   pi.registerTool({
     name: "plan_file_create",
@@ -2551,26 +2680,28 @@ export default function (pi: ExtensionAPI) {
     parameters: PlanCreateParams,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const dashboard = startBuildDashboard(ctx, params.path?.trim() || "Creating plan...");
-      try {
-        const result = await createPlanFile(
-          ctx,
-          { ...params, model: getSelectedModel(ctx), effort: getSelectedEffort() },
-          signal,
-          (partial) => {
-            dashboard.update(partial.details);
-            onUpdate?.(partial);
-          },
-          dashboard,
-        );
-        dashboard.update(result.details);
-        return { content: [{ type: "text", text: result.text }], details: result.details };
-      } catch (error) {
-        const message = commandErrorMessage(error);
-        dashboard.fail(message);
-        notifyPlannerBuilder(`Plan create failed: ${message}`);
-        throw error;
-      }
+      return operations.run("create", async (operation) => {
+        const dashboard = startBuildDashboard(ctx, params.path?.trim() || "Creating plan...");
+        try {
+          const result = await createPlanFile(
+            ctx,
+            { ...params, model: getSelectedModel(ctx), effort: getSelectedEffort() },
+            operation.abort.signal,
+            (partial) => {
+              dashboard.update(partial.details);
+              onUpdate?.(partial);
+            },
+            dashboard,
+          );
+          dashboard.update(result.details);
+          return { content: [{ type: "text" as const, text: result.text }], details: result.details };
+        } catch (error) {
+          const message = commandErrorMessage(error);
+          dashboard.fail(message);
+          notifyPlannerBuilder(`Plan create failed: ${message}`);
+          throw error;
+        }
+      }, signal);
     },
     renderCall(args, theme) {
       const path = args.path?.trim() || "new plan";
@@ -2601,6 +2732,7 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use plan_file_build when the user asks builder agents to implement tasks from a plan file.",
       "Use plan_file_build only after a plan file exists, usually from plan_file_create.",
+      "Supervision defaults off. Opt in with supervisionMode advisory (proposals only) or steer (bounded guidance). It never enables verification. Inspect and cancel via /plan-inspect and /plan-cancel; dashboard closure is not cancellation.",
       "plan_file_build selects jj only at a checkout with .jj metadata, never falling back when jj is broken; otherwise it uses Git worktrees. Each task creates exactly one non-empty commit. Git source changes must be committed locally on an attached feature branch, not pushed; source must be clean including untracked files except the active plan and findings report. Git integration is isolated and finalization is fast-forward only; failed/interrupted builds retain recovery records and worktrees.",
       "Set plan_file_build runVerifier to true only when the user explicitly asks for verifier-agent review; verification is skipped by default.",
       "To trigger verifier review after a completed build, call plan_file_build again for the same plan with runVerifier true; completed tasks are skipped.",
@@ -2608,25 +2740,28 @@ export default function (pi: ExtensionAPI) {
     parameters: PlanBuildParams,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const dashboard = startBuildDashboard(ctx, params.path);
-      try {
-        const result = await buildPlanFile(
-          ctx,
-          { ...params, model: getSelectedModel(ctx), effort: getSelectedEffort() },
-          signal,
-          (partial) => {
-            dashboard.update(partial.details);
-            onUpdate?.(partial);
-          },
-        );
-        dashboard.update(result.details);
-        return { content: [{ type: "text", text: result.text }], details: result.details };
-      } catch (error) {
-        const message = commandErrorMessage(error);
-        dashboard.fail(message);
-        notifyPlannerBuilder(`Plan build failed: ${message}`);
-        throw error;
-      }
+      return operations.run("build", async (operation) => {
+        const dashboard = startBuildDashboard(ctx, params.path);
+        try {
+          const result = await buildPlanFile(
+            ctx,
+            { ...params, model: getSelectedModel(ctx), effort: getSelectedEffort() },
+            operation.abort.signal,
+            (partial) => {
+              dashboard.update(partial.details);
+              onUpdate?.(partial);
+            },
+            operation,
+          );
+          dashboard.update(result.details);
+          return { content: [{ type: "text" as const, text: result.text }], details: result.details };
+        } catch (error) {
+          const message = commandErrorMessage(error);
+          dashboard.fail(message);
+          notifyPlannerBuilder(`Plan build failed: ${message}`);
+          throw error;
+        }
+      }, signal);
     },
     renderCall(args, theme) {
       const path = args.path?.trim() || "...";
@@ -2664,149 +2799,60 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("plan-create", {
-    description: "Run the planner agent with the current model and effort, surface material questions, and create a plan file. Usage: /plan-create <request>",
-    handler: async (args, ctx) => {
-      const request = args.trim() || (ctx.hasUI ? await ctx.ui.editor("Plan request:", "") : undefined);
-      if (!request?.trim()) {
-        ctx.ui.notify("Usage: /plan-create <request>", "warning");
-        return;
-      }
-
-      const run = async () => {
-        let progress: ReturnType<typeof startCommandProgress> | undefined;
-        let dashboard: PlanBuildDashboard | undefined;
-
+  for (const kind of ["create", "build"] as const) {
+    pi.registerCommand(`plan-${kind}`, {
+      description: kind === "create" ? "Create a plan: /plan-create <request>"
+        : "Build in isolated workspaces: /plan-build [--verify] [--supervise|--advisory] [plan-file] [T01,T02]. Supervision defaults off; --verify is independent.",
+      handler: async (args, ctx) => {
         try {
-          progress = startCommandProgress(ctx, "planner-builder", ctx.isIdle() ? "planning..." : "waiting for current turn...", {
-            onLog: ctx.hasUI ? (text) => sendCommandProgressMessage(pi, ctx, "/plan-create", text) : undefined,
-          });
-
-          if (!ctx.isIdle()) {
-            ctx.ui.notify("/plan-create queued; waiting for the current turn to finish.", "info");
-            await ctx.waitForIdle();
-            progress.log("Current turn finished; starting planner agent.");
-          } else {
-            ctx.ui.notify("/plan-create started in the background.", "info");
-            progress.log("Started planner agent in the background.");
-          }
-
-          dashboard = startBuildDashboard(ctx, "Creating plan...");
-          progress.update("planning...");
-          const result = await createPlanFile(
-            ctx,
-            { request, model: getSelectedModel(ctx), effort: getSelectedEffort() },
-            undefined,
-            (partial) => {
-              dashboard?.update(partial.details);
-              const statusText = statusTextFromUpdate(partial);
-              if (statusText) progress?.update(statusText, { log: true });
-            },
-            dashboard,
-          );
-          dashboard.update(result.details);
-          pi.sendMessage({ customType: "planner-builder", content: result.text, display: true, details: result.details });
-          ctx.ui.notify(result.text, "info");
-        } catch (error) {
-          const message = commandErrorMessage(error);
-          dashboard?.fail(message);
-          pi.sendMessage({
-            customType: "planner-builder",
-            content: `/plan-create failed.\n\n${message}`,
-            display: true,
-            details: { error: message },
-          });
-          await notifyCommandError(ctx, error);
-        } finally {
-          progress?.stop();
-        }
-      };
-
-      if (ctx.hasUI) {
-        void run();
-        return;
-      }
-
-      await run();
-    },
-  });
-
-  pi.registerCommand("plan-build", {
-    description: "Run builder agents with the current model and effort in auto-selected jj workspaces or Git worktrees and integrate commits. Add --verify to run verifier afterward. Usage: /plan-build [--verify] [plan-file] [T01,T02]",
-    handler: async (args, ctx) => {
-      const tokens = args.trim().split(/\s+/).filter(Boolean);
-      const runVerifier = tokens.includes("--verify");
-      const positionalTokens = tokens.filter((token) => token !== "--verify");
-      let planPath = positionalTokens.shift();
-      let taskIds = parseTaskIds(positionalTokens.join(","));
-
-      if (planPath && /^T\d+/i.test(planPath)) {
-        taskIds = [planPath, ...taskIds];
-        planPath = undefined;
-      }
-
-      if (!planPath) planPath = await latestPlanFile(ctx.cwd);
-
-      if (!planPath) {
-        ctx.ui.notify(`Usage: /plan-build [--verify] <plan-file> [T01,T02]. No files found in ${DEFAULT_PLAN_DIR}.`, "warning");
-        return;
-      }
-
-      const resolvedPlanPath = planPath;
-      const run = async () => {
-        let progress: ReturnType<typeof startCommandProgress> | undefined;
-        let dashboard: PlanBuildDashboard | undefined;
-
-        try {
-          progress = startCommandProgress(ctx, "planner-builder", ctx.isIdle() ? "building..." : "waiting for current turn...");
-
-          if (!ctx.isIdle()) {
-            ctx.ui.notify("/plan-build queued; waiting for the current turn to finish.", "info");
-            await ctx.waitForIdle();
-            progress.log("Current turn finished; starting builder agents.");
-          } else {
-            ctx.ui.notify("/plan-build started in the background.", "info");
-            progress.log("Started builder agents in the background.");
-          }
-
-          dashboard = startBuildDashboard(ctx, resolvedPlanPath);
-          progress.update("building...");
-          const result = await buildPlanFile(
-            ctx,
-            { path: resolvedPlanPath, taskIds, runVerifier, model: getSelectedModel(ctx), effort: getSelectedEffort() },
-            undefined,
-            (partial) => {
-              dashboard?.update(partial.details);
-              const statusText = statusTextFromUpdate(partial);
-              if (statusText) progress?.update(statusText, { log: true });
-            },
-          );
-          dashboard.update(result.details);
-          pi.sendMessage({ customType: "planner-builder", content: result.text, display: true, details: result.details });
-          ctx.ui.notify(`Plan build finished for ${resolvedPlanPath}.`, "info");
-        } catch (error) {
-          const message = commandErrorMessage(error);
-          dashboard?.fail(message);
-          pi.sendMessage({
-            customType: "planner-builder",
-            content: `/plan-build failed.\n\n${message}`,
-            display: true,
-            details: { error: message },
-          });
-          await notifyCommandError(ctx, error);
-        } finally {
-          progress?.stop();
-        }
-      };
-
-      if (ctx.hasUI) {
-        void run();
-        return;
-      }
-
-      await run();
-    },
-  });
+          // Acquire before path lookup, dialogs, background startup, or waitForIdle.
+          const completion = operations.run(kind, async (operation) => {
+            let progress: CommandProgress | undefined;
+            let dashboard: PlanBuildDashboard | undefined;
+            const signal = operation.abort.signal;
+            try {
+              const command = kind === "build" ? parseBuildCommand(args) : undefined;
+              const request = kind === "create"
+                ? args.trim() || (ctx.hasUI ? await ctx.ui.input("Plan request:", undefined, { signal }) : undefined)
+                : undefined;
+              const planPath = command?.path ?? (kind === "build" ? await latestPlanFile(ctx.cwd) : undefined);
+              if (kind === "create" && !request?.trim()) throw new Error("Usage: /plan-create <request>");
+              if (kind === "build" && !planPath) throw new Error(`No plan files found in ${DEFAULT_PLAN_DIR}. Usage: /plan-build [--verify] [--supervise|--advisory] <plan-file> [T01,T02]`);
+              signal.throwIfAborted();
+              progress = startCommandProgress(ctx, "planner-builder", `Run ${operation.runId}: ${kind} starting...`, {
+                onLog: kind === "create" && ctx.hasUI ? (text) => sendCommandProgressMessage(pi, ctx, "/plan-create", text) : undefined,
+              });
+              ctx.ui.notify(`Run ${operation.runId} owned. /plan-inspect ${operation.runId}; /plan-cancel ${operation.runId}. Dashboard close/toggle does not cancel.`, "info");
+              if (!ctx.isIdle()) {
+                progress.update("Waiting for current parent turn...");
+                await waitForParentIdle(() => ctx.waitForIdle(), signal);
+              }
+              dashboard = startBuildDashboard(ctx, planPath ?? "Creating plan...");
+              const update = (partial: ToolUpdate<PlanBuildDashboardData>): void => {
+                dashboard?.update(partial.details);
+                const text = statusTextFromUpdate(partial);
+                if (text) progress?.update(text, { log: kind === "create" });
+              };
+              const selection = { model: getSelectedModel(ctx), effort: getSelectedEffort() };
+              const result = kind === "create"
+                ? await createPlanFile(ctx, { request: request!, ...selection }, signal, update, dashboard)
+                : await buildPlanFile(ctx, { ...command!, path: planPath!, ...selection }, signal, update, operation);
+              dashboard.update(result.details);
+              pi.sendMessage({ customType: "planner-builder", content: result.text, display: true, details: result.details });
+              ctx.ui.notify(result.text, "info");
+            } catch (error) {
+              const message = commandErrorMessage(error);
+              dashboard?.fail(message);
+              pi.sendMessage({ customType: "planner-builder", content: `/plan-${kind} failed.\n\n${message}`, display: true, details: { error: message } });
+              await notifyCommandError(ctx, error);
+            } finally { progress?.stop(); }
+          }, ctx.signal);
+          if (ctx.hasUI) void completion.catch((error) => notifyCommandError(ctx, error));
+          else await completion;
+        } catch (error) { await notifyCommandError(ctx, error); }
+      },
+    });
+  }
 
   pi.registerCommand("plan-list", {
     description: "List recent planner-builder plan files.",

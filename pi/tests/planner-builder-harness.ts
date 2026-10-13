@@ -7,13 +7,58 @@ import * as path from "node:path";
 import * as vm from "node:vm";
 import { BuildController } from "../.pi/agent/extensions/planner-builder/build-controller.ts";
 import { runBuilder, type BuilderTransport } from "../.pi/agent/extensions/planner-builder/builder-runner.ts";
+import { normalizeSupervisionConfig, SUPERVISION_LIMITS } from "../.pi/agent/extensions/planner-builder/build-state.ts";
+import { canonicalRunRoot, parseBuildCommand, PlannerOperations, planningQuestionSection, recordedPlanningQuestions, waitForParentIdle } from "../.pi/agent/extensions/planner-builder/controls.ts";
+import { RunJournal } from "../.pi/agent/extensions/planner-builder/run-journal.ts";
+import { startSupervisor } from "../.pi/agent/extensions/planner-builder/supervisor.ts";
 import { createQuestionQueue } from "../.pi/agent/extensions/planner-builder/question-queue.ts";
 import type { RpcAgentOptions, RpcCloseResult, RpcPromptResult, RpcRecord, RpcResponse, RpcSettlement } from "../.pi/agent/extensions/planner-builder/rpc-agent.ts";
 import { parsePlanTaskResultMarker } from "../.pi/agent/extensions/planner-builder/result-marker.ts";
 import { detectVcs, GitBackend } from "../.pi/agent/extensions/planner-builder/vcs.ts";
 
+export class TestDashboard {
+  visible = false;
+  details: any;
+  error?: string;
+  constructor(_path: string) {}
+  close(): void { this.visible = false; }
+  isVisible(): boolean { return this.visible; }
+  update(details: unknown): void { this.details = details; }
+  fail(error: string): void { this.error = error; }
+}
+
+export function extensionRuntime(api: Record<string, any>, ctxOverrides: Record<string, unknown> = {}): Record<string, any> {
+  const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
+  const events = new Map<string, any>();
+  const shortcuts = new Map<string, any>();
+  const notifications: string[] = [];
+  const messages: any[] = [];
+  const pi = {
+    registerCommand: (name: string, command: unknown) => commands.set(name, command),
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    registerShortcut: (name: string, shortcut: unknown) => shortcuts.set(name, shortcut),
+    registerMessageRenderer: () => {},
+    on: (name: string, handler: unknown) => events.set(name, handler),
+    events: { on: () => {} }, getThinkingLevel: () => "off", getActiveTools: () => [],
+    sendMessage: (message: unknown) => { messages.push(message); },
+  };
+  const ctx = {
+    cwd: "/unused", hasUI: true, mode: "tui", model: { provider: "test", id: "model" },
+    isIdle: () => true, waitForIdle: () => Promise.resolve(),
+    ui: { notify: (text: string) => { notifications.push(text); }, setStatus: () => {} },
+    ...ctxOverrides,
+  };
+  api.registerExtension(pi);
+  return { pi, ctx, commands, tools, events, shortcuts, notifications, messages,
+    command: (name: string, args = "") => commands.get(name).handler(args, ctx),
+    tool: (name: string, args: unknown, signal?: AbortSignal) => tools.get(name).execute("test-call", args, signal, undefined, ctx),
+    shutdown: () => events.get("session_shutdown")({ reason: "reload" }, ctx),
+  };
+}
+
 /** Run the real scheduler/jj helpers without Pi UI packages or actual agent subprocesses. */
-export function loadPlannerBuilder(workspaceRoot: string): Record<string, any> {
+export function loadPlannerBuilder(workspaceRoot: string, overrides: Record<string, unknown> = {}): Record<string, any> {
   const source = fs.readFileSync(new URL("../.pi/agent/extensions/planner-builder/index.ts", import.meta.url), "utf8");
   const javascript = stripTypeScriptTypes(source)
     .replace(/^import[\s\S]*?;\n/gm, "")
@@ -21,12 +66,18 @@ export function loadPlannerBuilder(workspaceRoot: string): Record<string, any> {
   const mutations = new Map<string, Promise<unknown>>();
   const context = vm.createContext({
     spawn, fs, os, path, randomUUID, detectVcs, GitBackend, parsePlanTaskResultMarker,
-    BuildController, runBuilder, createQuestionQueue,
+    BuildController, runBuilder, createQuestionQueue, RunJournal, startSupervisor,
+    canonicalRunRoot, parseBuildCommand, PlannerOperations, planningQuestionSection, recordedPlanningQuestions, waitForParentIdle,
+    normalizeSupervisionConfig, SUPERVISION_LIMITS,
+    PlanBuildDashboard: TestDashboard,
+    showPlanBuildDashboard: (_ctx: unknown, dashboard: TestDashboard) => { dashboard.visible = true; },
+    hidePlanBuildDashboard: (_ctx: unknown, dashboard: TestDashboard) => { dashboard.close(); },
+    formatAgentList: () => "builder, verifier, planner",
     createUserQuestionBridge: () => { throw new Error("Inject a question bridge for this test"); },
     parseUserQuestion: () => { throw new Error("Inject a question parser for this test"); },
     writeUserQuestionResponse: () => { throw new Error("Inject a question writer for this test"); },
-    process: { ...process, env: { ...process.env, PI_PLAN_WORKSPACE_ROOT: workspaceRoot } },
-    AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+    process: { ...process, env: { ...process.env, PI_SUBAGENT: undefined, PI_PLAN_WORKSPACE_ROOT: workspaceRoot, PI_PLAN_RUN_ROOT: `${workspaceRoot}-runs` } },
+    AbortController, Buffer, setTimeout, clearTimeout, setInterval, clearInterval,
     Type: new Proxy({}, { get: () => () => ({}) }), StringEnum: () => ({}),
     truncateHead: (content: string) => ({ content, truncated: false }),
     truncateTail: (content: string) => ({ content, truncated: false }),
@@ -38,9 +89,12 @@ export function loadPlannerBuilder(workspaceRoot: string): Record<string, any> {
       mutations.set(file, next.catch(() => {}));
       return next;
     },
+    ...overrides,
   });
   return vm.runInContext(`${javascript}\n({
-    buildPlanFile, createBuilderTask, createVerifierTask, createPlannerTask,
+    registerExtension, buildPlanFile, createPlanFile, createBuilderTask, createVerifierTask, createPlannerTask,
+    setBuildPlanFile(fn) { buildPlanFile = fn; },
+    setCreatePlanFile(fn) { createPlanFile = fn; },
     parsePlanTasks, selectParallelTaskBatch, classifyBuilderResult,
     getJjWorkspaceRoot, getMainJjWorkspaceRoot, getCommitId,
     createTaskWorkspace, validateTaskWorkspaceCommit, integrateTaskWorkspace,
@@ -48,6 +102,38 @@ export function loadPlannerBuilder(workspaceRoot: string): Record<string, any> {
     setBuilderLifecycle(fn) { runBuilderLifecycle = fn; },
     setBuilderTransport(fn) { builderDependencies.createTransport = fn; }
   })`, context);
+}
+
+/** Real dashboard classes with small terminal primitives; lifecycle belongs to the
+ * dashboard implementation, not to these rendering stubs. */
+export function loadPlanDashboard(): Record<string, any> {
+  class Text {
+    text: string;
+    constructor(text: string) { this.text = text; }
+    render(width: number): string[] { return this.text.split("\n").flatMap((line) => line.match(new RegExp(`.{1,${Math.max(1, width)}}`, "g")) ?? [""]); }
+  }
+  class Container {
+    children: any[] = [];
+    addChild(child: unknown): void { this.children.push(child); }
+    render(width: number): string[] { return this.children.flatMap((child) => child.render(width)); }
+  }
+  class Input {
+    focused = false;
+    setValue(): void {}
+    invalidate(): void {}
+  }
+  function source(file: string): string {
+    return stripTypeScriptTypes(fs.readFileSync(new URL(file, import.meta.url), "utf8"))
+      .replace(/^import[\s\S]*?;\n/gm, "")
+      .replace(/^export \{[^}]+\};\n/gm, "")
+      .replace(/^export /gm, "");
+  }
+  const context = vm.createContext({ Text, Container, Input, Spacer: class extends Text { constructor() { super(""); } },
+    matchesKey: (data: string, key: string) => data === key,
+    truncateToWidth: (text: string, width: number) => text.slice(0, width), visibleWidth: (text: string) => text.length,
+    wrapTextWithAnsi: (text: string, width: number) => new Text(text).render(width),
+  });
+  return vm.runInContext(`${source("../.pi/agent/extensions/shared/agent-dashboard.ts")}\n${source("../.pi/agent/extensions/planner-builder/dashboard.ts")}\n({ PlanBuildDashboard, renderPlanBuildDetails, DASHBOARD_CONTROL_HELP })`, context);
 }
 
 /** Explicit RPC seam: runs scripted workspace work and emits authoritative lifecycle

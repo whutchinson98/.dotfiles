@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { test } from "node:test";
-import type { RunBuilderOptions } from "../.pi/agent/extensions/planner-builder/builder-runner.ts";
+import { runBuilder, type RunBuilderOptions } from "../.pi/agent/extensions/planner-builder/builder-runner.ts";
 import type { RpcAgentOptions } from "../.pi/agent/extensions/planner-builder/rpc-agent.ts";
 import { fixture, git } from "./planner-builder-fixtures.ts";
 import { loadPlannerBuilder, ScriptedBuilderTransport } from "./planner-builder-harness.ts";
@@ -100,36 +100,40 @@ test("shared scheduler runs independent Git builders concurrently, then updated 
 });
 
 for (const failure of ["source-edits", "cancel"]) {
-  test(`scheduler ${failure} leaves durable done-task recovery and does not run verifier`, async (t) => {
+  test(`scheduler ${failure} retains recovery and does not run verifier`, async (t) => {
     const f = await fixture(t);
     await fs.writeFile(f.plan, plan.split("### Task T02")[0]);
     const api = loadPlannerBuilder(path.join(f.parent, "tasks"));
     const initialHead = await git(f.root, "rev-parse", "HEAD");
     const controller = new AbortController();
     api.setRunAgent(() => { throw new Error("Verifier must not run after finalization failure"); });
-    // This test targets VCS finalization after a completed lifecycle, not RPC cancellation.
-    api.setBuilderLifecycle(async ({ workspace, agent }: RunBuilderOptions) => {
-      const cwd = workspace.cwd;
-      assert.equal(agent.name, "builder");
-      await fs.writeFile(path.join(cwd, "one.txt"), "task");
-      await git(cwd, "add", "one.txt");
-      await git(cwd, "commit", "-m", "task");
+    api.setBuilderTransport((options: RpcAgentOptions) => new ScriptedBuilderTransport(options, async (child) => {
+      await fs.writeFile(path.join(options.cwd, "one.txt"), "task");
+      await git(options.cwd, "add", "one.txt");
+      await git(options.cwd, "commit", "-m", "task");
+      child.message();
+      child.settle();
+    }));
+    // Exercise finalization only after a real seal. Cancellation revokes that seal
+    // before integration; a successful textual marker cannot override it.
+    api.setBuilderLifecycle(async (options: RunBuilderOptions) => {
+      const result = await runBuilder(options);
       if (failure === "cancel") controller.abort();
       else await fs.writeFile(path.join(f.root, "user.txt"), "unsaved work");
-      return success(agent.name, cwd);
+      return result;
     });
     await assert.rejects(api.buildPlanFile({ cwd: f.root, hasUI: false }, {
       path: f.plan, model: "test", effort: "off", builderMonitor: false, runVerifier: true,
     }, controller.signal), /Recovery record:/);
     assert.equal(await git(f.root, "rev-parse", "HEAD"), initialHead);
     const updated = await fs.readFile(f.plan, "utf8");
-    assert.match(updated, /Status: done/);
+    assert.match(updated, failure === "cancel" ? /Status: failed/ : /Status: done/);
     const recovery = updated.match(/Recovery record: (.+?\.json)/)?.[1];
     assert.ok(recovery);
     const record = JSON.parse(await fs.readFile(recovery, "utf8"));
     assert.equal(record.state, "running");
     assert.ok(await fs.stat(record.integration.rootPath));
-    assert.equal(record.tasks[0].status, "integrated");
+    assert.equal(record.tasks[0].status, failure === "cancel" ? "created" : "integrated");
   });
 }
 
