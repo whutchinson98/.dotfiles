@@ -148,7 +148,7 @@ T08 and T09 can run concurrently after T07.
 ## Builder Tasks
 
 ### Task T01: Define bounded build observations and decision persistence
-Status: pending
+Status: in-progress
 Depends on: none
 Files:
 - pi/.pi/agent/extensions/planner-builder/build-state.ts
@@ -170,8 +170,26 @@ Verification:
 - `node --test pi/tests/planner-builder-events.test.ts pi/tests/planner-builder-journal.test.ts`
 - Confirm tests cover multibyte byte limits, duplicate usage records, oversized evidence, append ordering, capacity reservation, and journal write failure.
 
+#### Builder result 2026-10-13T13:22:16.795Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t01
+- Integration: Workspace kept for inspection at /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t01.
+- Status: blocked
+- Exit code: 0
+- Result marker: blocked
+
+```text
+Blocked: `jj status --no-pager` reports a stale working copy requiring `jj workspace update-stale`. Workspace management is reserved for the planner-builder runner.
+
+No files changed, tests run, or commit created. Please have the runner refresh this workspace and retry.
+
+PLAN_TASK_RESULT: blocked
+```
+
 ### Task T02: Implement a continuously drained RPC subprocess transport
-Status: pending
+Status: done
 Depends on: none
 Files:
 - pi/.pi/agent/extensions/planner-builder/rpc-agent.ts
@@ -192,8 +210,29 @@ Verification:
 - `node --test pi/tests/planner-builder-rpc.test.ts`
 - Cover split UTF-8/JSONL, CRLF, Unicode separators, backpressure, reordered responses, handled prompts, fast settling, retry followed by `agent_end` then settlement, unexpected exit, stalled shutdown, and descendant termination.
 
+#### Builder result 2026-10-13T13:41:15.124Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t02
+- Commit: 3c0f2fa269c368e61b3ad8ed56b6cd4a3d94539e
+- Integration: Integrated 3c0f2fa269c368e61b3ad8ed56b6cd4a3d94539e on top of 185bdb0115240a19efb083d2ff7833299e372a71.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Implemented bounded RPC transport in `pi/.pi/agent/extensions/planner-builder/rpc-agent.ts`, with fake-child fixtures and tests covering framing, backpressure, settlement races, UI cancellation, and process-group shutdown.
+
+Verification: 40 tests pass across ten consecutive runs; syntax checks pass.
+
+Commit: `3c0f2fa2`. Working copy clean.
+
+PLAN_TASK_RESULT: done
+```
+
 ### Task T03: Add narrow supervisor tools and bounded parent-side evidence
-Status: pending
+Status: done
 Depends on: none
 Files:
 - pi/.pi/agent/extensions/planner-builder/supervisor-bridge.ts
@@ -215,6 +254,27 @@ Instructions:
 Verification:
 - `node --test pi/tests/planner-builder-bridge.test.ts pi/tests/planner-builder-evidence.test.ts`
 - Test bridge cancellation/duplicates, question serialization, unavailable UI, malicious IDs/paths, symlink escapes, bounded diff output, and absence of arbitrary command execution.
+
+#### Builder result 2026-10-13T13:43:48.288Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t03
+- Commit: d35cd21433288e15fbf33da63149532633878f57
+- Integration: Integrated d35cd21433288e15fbf33da63149532633878f57 on top of 3c0f2fa269c368e61b3ad8ed56b6cd4a3d94539e.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed T03 as `54427df6`; working copy is clean.
+
+- Added isolated supervisor bridge, serialized question queue, and bounded evidence APIs.
+- Safety limits reject all symlinks; diffs inspect stored revisions only.
+- Verification: 17 focused tests and all 68 planner-builder tests passed.
+
+PLAN_TASK_RESULT: done
+```
 
 ### Task T04: Enforce validated controls and an integration barrier
 Status: pending
