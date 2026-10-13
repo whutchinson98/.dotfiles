@@ -2002,6 +2002,7 @@ async function buildPlanFile(
   let gitBackend: GitBackend | undefined;
   let initialHead = "";
   let integratedHead = "";
+  let jjBasePrepared = false;
   const cleanupWarnings: string[] = [];
   const questions = createQuestionQueue({
     interactive: () => ctx.hasUI,
@@ -2104,6 +2105,18 @@ async function buildPlanFile(
           skipped.push({ id: task.id, title: task.title, reason: taskBlockerReason(task, tasksById) });
         }
         break;
+      }
+
+      if (!gitBackend && !jjBasePrepared) {
+        // Freeze the source snapshot before forking builders. Plan/status writes
+        // (or a source dashboard snapshot) must not rewrite their shared ancestor
+        // and leave already-running task workspaces stale. `jj new` snapshots the
+        // latest source edits atomically and leaves the source on a sibling of
+        // the task changes. No-op/verify-only runs do not move the working copy.
+        await runJj(ctx.cwd, ["new"]);
+        initialHead = await getCommitId(ctx.cwd, "@-");
+        integratedHead = initialHead;
+        jjBasePrepared = true;
       }
 
       onUpdate?.({

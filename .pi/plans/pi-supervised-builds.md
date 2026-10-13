@@ -534,7 +534,7 @@ PLAN_TASK_RESULT: done
 ```
 
 ### Task T08: Add end-to-end supervised transport and source-preservation regressions
-Status: pending
+Status: in-progress
 Depends on: T07
 Files:
 - pi/tests/planner-builder-supervised.test.ts
@@ -556,8 +556,30 @@ Verification:
 - `node --test --test-concurrency=1 pi/tests/planner-builder*.test.ts`
 - All commands must terminate without leaked children, use no models/remotes, and pass both parallel and serial test execution.
 
+#### Builder result 2026-10-13T16:18:07.339Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t08
+- Integration: Workspace kept for inspection at /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t08.
+- Status: blocked
+- Exit code: 0
+- Result marker: blocked
+
+```text
+Blocked by a production jj defect: `index.ts:2128–2129` interleaves workspace creation with source plan updates. Creating T02 snapshots the changed base, leaving T01 stale before committing.
+
+- Added regressions in the three assigned files.
+- Focused: 18 passed, 2 failed.
+- Full parallel and serial: 269 passed, 2 failed each.
+- No models/remotes invoked; no leaked fixture children found.
+- No commit created: verification fails, and this task workspace now also reports stale. Changes remain uncommitted for retry after runner repair.
+
+PLAN_TASK_RESULT: blocked
+```
+
 ### Task T09: Document opt-in supervision and safe operating guidance
-Status: pending
+Status: done
 Depends on: T07
 Files:
 - pi/.pi/agent/extensions/planner-builder/README.md
@@ -582,6 +604,27 @@ Verification:
 - Check documented command names/defaults against `controls.ts` and `PlanBuildParams`, and confirm neither agent’s existing tool privileges were expanded.
 
 ---
+
+#### Builder result 2026-10-13T16:25:26.557Z
+- Agent: builder
+- Model: openai-codex/gpt-6-astra
+- Effort: xhigh
+- Workspace: /home/hutch/.pi/plan-workspaces/.dotfiles/.dotfiles-t09
+- Commit: 1587cce75308e4213383919f42d951993935f879
+- Integration: Integrated 1587cce75308e4213383919f42d951993935f879 on top of effc79dd06a5afff869483f22a298f3a67b16c36.
+- Status: done
+- Exit code: 0
+- Result marker: done
+
+```text
+Committed `1587cce7`; working copy clean.
+
+- Updated all six assigned docs with supervision, recovery, deployment, and agent guidance.
+- All 256 tests and documentation checks passed; agent privileges unchanged.
+- Stow dry run reported existing-link conflicts. No deployment or repairs attempted.
+
+PLAN_TASK_RESULT: done
+```
 
 ## Critical Files
 
