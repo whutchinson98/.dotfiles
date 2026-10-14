@@ -26,6 +26,10 @@ set -gx DOCKER_GATEWAY_HOST 172.17.0.1
 set -gx RIPGREP_CONFIG_PATH $HOME/.ripgreprc
 set -gx EDITOR nvim
 
+if test -f "$HOME/.kube/k3s.yaml"
+    set -gx KUBECONFIG "$HOME/.kube/k3s.yaml"
+end
+
 # Outside Nix, expose Fedora's curl headers to Zig without shadowing its libc.
 # Preserve target flags supplied by the Nix shell or another build environment.
 if test -f /usr/include/curl/curl.h

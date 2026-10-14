@@ -34,6 +34,7 @@ with `init.sh`.
 just install-list          # every program, its status and install method
 just install-status        # short summary of what is missing
 just install neovim        # install one
+just install age-keygen    # install age and its key generator
 just install-check neovim  # preview it, changing nothing
 just install-all           # install everything missing, in dependency order
 ```
@@ -58,13 +59,14 @@ is slow by nature.
 
 Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 `NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`, `TAILSCALE_VERSION=1.102.3`,
-`SOPS_VERSION=v3.13.3`, `KUBECTL_VERSION=v1.35.0`.
+`SOPS_VERSION=v3.13.3`, `KUBECTL_VERSION=v1.35.0`, `HELM_VERSION=v4.0.0`.
 
 ### Install methods
 
 | Program | Method |
 | --- | --- |
 | fish, tmux, git, alacritty, stow | distro package |
+| age-keygen | distro package `age` (also installs `age`) |
 | lua | distro package (`lua5.4` on Debian/Ubuntu, `lua` on Fedora/RHEL) |
 | eza, fzf | distro package, falling back to a GitHub release on older distros |
 | fd | distro package `fd-find` (Debian names the binary `fdfind`) |
@@ -72,7 +74,9 @@ Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 | aws | AWS CLI v2 official bundled installer |
 | tailscale | Tailscale's own apt/dnf repository, added by their install script |
 | starship, mise, fnm, bun, pnpm, claude, herdr, doppler | upstream install script |
+| flux | official `fluxcd.io/install.sh` script, run as root/sudo (installs to `/usr/local/bin`) |
 | neovim, go, fonts | official release tarball/zip |
+| helm | official Linux release tarball from `get.helm.sh` (amd64/arm64), SHA-256 checked, installed to `~/.local/bin` |
 | sops | official Linux release binary (amd64/arm64), SHA-256 checked, installed to `~/.local/bin` |
 | kubectl | stable Linux binary from `dl.k8s.io` (amd64/arm64), SHA-256 checked, installed to `~/.local/bin` |
 | rust (rustup) | rustup.rs; rust-analyzer as a rustup component |
