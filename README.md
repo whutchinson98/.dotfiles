@@ -57,7 +57,8 @@ installs the requested version through fnm.
 is slow by nature.
 
 Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
-`NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`, `TAILSCALE_VERSION=1.102.3`.
+`NODE_VERSION=22`, `NERD_FONTS_VERSION=v3.4.0`, `TAILSCALE_VERSION=1.102.3`,
+`SOPS_VERSION=v3.13.3`, `KUBECTL_VERSION=v1.35.0`.
 
 ### Install methods
 
@@ -72,6 +73,8 @@ Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 | tailscale | Tailscale's own apt/dnf repository, added by their install script |
 | starship, mise, fnm, bun, pnpm, claude, herdr, doppler | upstream install script |
 | neovim, go, fonts | official release tarball/zip |
+| sops | official Linux release binary (amd64/arm64), SHA-256 checked, installed to `~/.local/bin` |
+| kubectl | stable Linux binary from `dl.k8s.io` (amd64/arm64), SHA-256 checked, installed to `~/.local/bin` |
 | rust (rustup) | rustup.rs; rust-analyzer as a rustup component |
 | jj, ripgrep, just | `cargo install --locked` |
 | node | `fnm install` |
