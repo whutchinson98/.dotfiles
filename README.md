@@ -35,6 +35,8 @@ just install-list          # every program, its status and install method
 just install-status        # short summary of what is missing
 just install neovim        # install one
 just install age-keygen    # install age and its key generator
+just install cf            # install Cloudflare's CLI
+just install yazi          # install Yazi, its companion CLI (ya), and Chafa
 just install-check neovim  # preview it, changing nothing
 just install-all           # install everything missing, in dependency order
 ```
@@ -81,18 +83,30 @@ Versions can be pinned per-run: `NVIM_VERSION=v0.11.2`, `GO_VERSION=1.24.0`,
 | kubectl | stable Linux binary from `dl.k8s.io` (amd64/arm64), SHA-256 checked, installed to `~/.local/bin` |
 | rust (rustup) | rustup.rs; rust-analyzer as a rustup component |
 | jj, ripgrep, just | `cargo install --locked` |
+| yazi | `cargo install --force yazi-build` (installs `yazi` and `ya`); distro packages `file` and `chafa` if missing |
 | node | `fnm install` |
 | pi | `npm install -g @earendil-works/pi-coding-agent` |
 | codex | `npm install -g @openai/codex` |
+| cf | `npm install --global cf` |
 | gopls | `go install` |
 
 Dependency order is declared once, in `INSTALL_ORDER` in the justfile: rustup
-before the cargo tools, go before gopls, fnm before node before pi and codex. Individual
+before the cargo tools, go before gopls, fnm before node before pi, codex and cf. Individual
 scripts also guard their own prerequisites, so `just install jj` on a machine
 without cargo tells you to run `just install rust` first rather than failing
 obscurely.
 
-`tailscale` is the one installer that leaves a manual step behind: it installs
+`yazi` requires Rust (`just install rust`) and builds from source using the
+[upstream build helper](https://yazi-rs.github.io/docs/installation/#crates).
+The installer also adds `file` and Chafa (for terminal image previews), including
+when Yazi is already installed. Other optional preview tools such as FFmpeg,
+7-Zip, jq and Poppler are not installed
+by this script; fd, ripgrep, fzf and Nerd Fonts are already part of `install-all`.
+
+`cf` installs Cloudflare's CLI globally via npm (requires Node.js 22.18 or later).
+Run `cf auth login` separately to authenticate; credentials are not managed here.
+
+`tailscale` leaves a manual connection step behind: it installs
 the package and enables `tailscaled`, but joining a tailnet needs a browser or
 an auth key, so it prints a reminder to run `sudo tailscale up` and stops
 there. Nothing in this repo stores tailnet credentials.

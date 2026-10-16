@@ -17,6 +17,7 @@ case "$prog" in
     ripgrep) has rg     && exit 0 || exit 1 ;;
     neovim)  has nvim   && exit 0 || exit 1 ;;
     rust)    has rustup && exit 0 || exit 1 ;;
+    yazi)    has yazi && has ya && has file && has chafa && exit 0 || exit 1 ;;
     fd)
         # Debian installs fd-find's binary as fdfind to avoid a name clash.
         has fd     && exit 0
