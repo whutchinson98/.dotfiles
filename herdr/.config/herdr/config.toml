@@ -3,7 +3,10 @@ onboarding = false
 [keys]
 split_vertical = "prefix+|"
 split_horizontal = "prefix+minus"
-
+   
 [theme]
 name = "gruvbox"
 auto_switch = false
+
+[terminal]
+default_shell = "/opt/homebrew/bin/fish"
