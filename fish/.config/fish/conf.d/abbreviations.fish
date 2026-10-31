@@ -26,7 +26,3 @@ abbr -a cb -- 'cargo build'
 abbr -a cbr -- 'cargo build --release'
 abbr -a cr -- 'cargo run'
 abbr -a ct -- 'cargo test'
-
-# --- Aliases (shellAliases) ---
-alias jjw jj_workspace_add
-alias tm tmux_new_session
