@@ -24,6 +24,10 @@ case "$prog" in
         has fdfind && exit 0
         exit 1 ;;
     fonts)
+        if [ "$(uname -s)" = Darwin ]; then
+            [ -f "$HOME/Library/Fonts/GeistMonoNerdFont-Regular.otf" ] && exit 0
+            exit 1
+        fi
         # Considered installed once fontconfig can see a GeistMono face.
         has fc-list || exit 1
         [ "$(fc-list 2>/dev/null | grep -ci geistmono)" -gt 0 ] && exit 0

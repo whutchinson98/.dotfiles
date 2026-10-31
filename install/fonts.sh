@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Install GeistMono Nerd Font into ~/.local/share/fonts.
+# Install GeistMono Nerd Font into the platform's user font directory.
 #
 # alacritty.toml names "GeistMono Nerd Font" for all four styles; without it
 # Alacritty silently falls back to a default face, and the starship prompt
 # plus nvim's devicons render as boxes.
 #
 # Set NERD_FONTS_VERSION to pin a ryanoasis/nerd-fonts release tag.
-SCRIPT_DESC="Install GeistMono Nerd Font to ~/.local/share/fonts."
+SCRIPT_DESC="Install GeistMono Nerd Font to the platform's user font directory."
 . "$(dirname "$(readlink -f "$0")")/lib.sh"
 lib_parse_args "$@"
 
 FONT_NAME="GeistMono"
 FONT_DIR="$HOME/.local/share/fonts"
+if [ "$(uname -s)" = Darwin ]; then
+    FONT_DIR="$HOME/Library/Fonts"
+fi
 
-if have fc-list && [ "$(fc-list 2>/dev/null | grep -ci geistmono)" -gt 0 ]; then
+if [ "$(uname -s)" = Darwin ]; then
+    [ ! -f "$FONT_DIR/GeistMonoNerdFont-Regular.otf" ] || already "GeistMono Nerd Font"
+elif have fc-list && [ "$(fc-list 2>/dev/null | grep -ci geistmono)" -gt 0 ]; then
     already "GeistMono Nerd Font" "$(fc-list | grep -ci geistmono) faces"
 fi
 
@@ -29,7 +34,9 @@ run mkdir -p "$FONT_DIR"
 log "unpacking into $FONT_DIR"
 run unzip -oq "$TMP_DIR/font.zip" -d "$FONT_DIR" -x 'README*' 'LICENSE*' 'OFL*'
 
-if have fc-cache; then
+if [ "$(uname -s)" = Darwin ]; then
+    log "macOS registers fonts from $FONT_DIR automatically"
+elif have fc-cache; then
     log "rebuilding font cache"
     run fc-cache -f "$FONT_DIR"
 else

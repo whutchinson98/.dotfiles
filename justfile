@@ -1,3 +1,4 @@
+
 # Dotfiles managed with GNU Stow.
 #
 # Packages are discovered dynamically: every top-level directory is a stow
@@ -17,7 +18,8 @@ NON_PACKAGES := "docs install"
 INSTALL_ORDER := "git stow fish tmux alacritty eza fzf fd fonts starship mise rust jj ripgrep just yazi go gopls lua neovim fnm node pi codex cf bun pnpm pulumi kubectl helm flux op aws age-keygen sops doppler tailscale claude herdr"
 
 # Shell snippet that prints one package name per line.
-pkgs := "ls -1 " + REPO + " | while read -r d; do [ -d '" + REPO + "'/\"$d\" ] || continue; case \" " + NON_PACKAGES + " \" in *\" $d \"*) continue;; esac; echo \"$d\"; done"
+# Discover top-level directories and exclude NON_PACKAGES.
+pkgs := "find '" + REPO + "' -mindepth 1 -maxdepth 1 -type d | while IFS= read -r d; do n=${d##*/}; if [[ ' " + NON_PACKAGES + " ' != *\" $n \"* ]]; then printf '%s\\n' \"$n\"; fi; done | sort"
 
 _default:
     @just --list --unsorted
@@ -246,4 +248,3 @@ setup:
     @cd {{ REPO }} && ./init.sh
     @just install-all
     @just sync
-    @just install-status
