@@ -1,8 +1,8 @@
 # Converted from nixos-config/modules/terminal/jujutsu.nix
 
 [user]
-email = "will@thehutchery.com"
-name = "Hutch"
+email = "will.hutchinson@spellbook.com"
+name = "Will Hutchinson"
 
 [remotes.origin]
 auto-track-bookmarks = "glob:hutch/* | glob:whutchinson98/*"
